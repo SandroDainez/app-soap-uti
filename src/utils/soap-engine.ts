@@ -442,58 +442,15 @@ function mergeDataPoints(existing: DataPoint[], incoming: DataPoint[]): DataPoin
 
 function reconcileSinaisVitais(base: string[], atual: string[]): { merged: string[]; conflitos: Conflito[] } {
   const conflitos: Conflito[] = [];
-  const merged: string[] = [...base];
-
-  // Extrai parâmetros individuais de linhas compostas
-  const extractVitalParams = (line: string): string[] => {
-    const params: string[] = [];
-    // Extrai PA, FC, FR, Temp, SpO2, PAM individualmente
-    const paMatch = line.match(/(?:PA|TA|Pressão Arterial)[:\s]+[\d\/]+(?:\s*mmHg)?/i);
-    const fcMatch = line.match(/FC[:\s]+[\d\-]+(?:\s*bpm)?/i);
-    const frMatch = line.match(/FR[:\s]+[\d\-]+(?:\s*irpm)?/i);
-    const tempMatch = line.match(/Temp(?:eratura)?[:\s]+[\d\.]+(?:\s*°C)?/i);
-    const spo2Match = line.match(/SpO2[:\s]+[\d]+(?:\s*%)?/i);
-    const pamMatch = line.match(/PAM[:\s]+[\d]+(?:\s*mmHg)?/i);
-    
-    if (paMatch) params.push(paMatch[0]);
-    if (fcMatch) params.push(fcMatch[0]);
-    if (frMatch) params.push(frMatch[0]);
-    if (tempMatch) params.push(tempMatch[0]);
-    if (spo2Match) params.push(spo2Match[0]);
-    if (pamMatch) params.push(pamMatch[0]);
-    
-    return params;
-  };
-
-  // Para cada sinal vital atual, verifica se há conflito com o anterior
-  for (const atualLine of atual) {
-    const atualParams = extractVitalParams(atualLine);
-    
-    for (let i = 0; i < merged.length; i++) {
-      const existingParams = extractVitalParams(merged[i]);
-      
-      // Verifica se há sobreposição de parâmetros
-      for (const atualParam of atualParams) {
-        for (const existingParam of existingParams) {
-          if (isSameVitalSign(existingParam.toLowerCase(), atualParam.toLowerCase())) {
-            // Se os valores são diferentes, é um conflito
-            if (existingParam.toLowerCase() !== atualParam.toLowerCase()) {
-              conflitos.push({
-                campo: 'Sinais Vitais',
-                valorAnterior: existingParam,
-                valorAtual: atualParam,
-                resolvido: false,
-              });
-              // Substitui o parâmetro antigo pelo novo na linha original
-              merged[i] = merged[i].replace(new RegExp(existingParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), atualParam);
-            }
-          }
-        }
-      }
-    }
+  
+  // REGRA 1: Exame atual prevalece sobre histórico
+  // Se há sinais vitais no exame atual, usar APENAS o atual
+  if (atual.length > 0) {
+    return { merged: atual, conflitos: [] };
   }
-
-  return { merged, conflitos };
+  
+  // Se não há atual, usar o base (histórico)
+  return { merged: base, conflitos: [] };
 }
 
 function isSameVitalSign(a: string, b: string): boolean {
