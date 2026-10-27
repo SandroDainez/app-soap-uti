@@ -278,6 +278,33 @@ function classifyLine(line: string): string | null {
   return null;
 }
 
+// Função auxiliar para capturar conteúdo subsequente até encontrar outro cabeçalho
+function captureSubsequentContent(lines: string[], startIndex: number): string[] {
+  const content: string[] = [];
+  let i = startIndex + 1;
+  
+  while (i < lines.length) {
+    const nextLine = lines[i].trim();
+    if (!nextLine) {
+      i++;
+      continue;
+    }
+    
+    // Verificar se é um novo cabeçalho (linha que começa com palavra-chave seguida de :)
+    const isHeader = /^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ\s]+:\s*$/i.test(nextLine) || 
+                     /^(paciente|nome|leito|quarto|conv[eê]nio|dx|diagn[óo]stico|hip[óo]tese|plano|conduta|antecedentes|sedação|analgesia|exames|culturas|medicações|profilaxias|drogas|interconsultas)/i.test(nextLine);
+    
+    if (isHeader) {
+      break;
+    }
+    
+    content.push(nextLine);
+    i++;
+  }
+  
+  return content;
+}
+
 // Extrai dados de um texto (texto-base ou exame atual)
 function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): ExtractionResult {
   const result = createEmptyExtraction();
@@ -294,7 +321,13 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
       case 'identificacao':
         // Aceitar variações comuns de identificação (com ou sem dois pontos)
         if (/^(nome|paciente|nome do paciente|nome completo)/i.test(line)) {
-          result.identificacao.nome = line.replace(/^(nome|paciente|nome do paciente|nome completo)\s*[:\-]?\s*/i, '').trim();
+          const nomeExtraido = line.replace(/^(nome|paciente|nome do paciente|nome completo)\s*[:\-]?\s*/i, '').trim();
+          // Validar que o nome é curto (1-5 palavras) e não contém termos clínicos
+          const termosClinicos = /desorientad|eupneic|traqueostomi|ventila[çc][ãa]o|hemodin[aâ]mic|neurol[óo]gic|cardiovascular|respirat[óo]r/i;
+          const palavras = nomeExtraido.split(/\s+/);
+          if (palavras.length <= 5 && !termosClinicos.test(nomeExtraido)) {
+            result.identificacao.nome = nomeExtraido;
+          }
         }
         else if (/^(leito|quarto|aposento)/i.test(line)) {
           result.identificacao.leito = line.replace(/^(leito|quarto|aposento)\s*[:\-]?\s*/i, '').trim();
@@ -310,10 +343,39 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
         }
         break;
       case 'subjetivo':
-        if (/hda|hist[óo]ria da doen[çc]a/i.test(line)) result.subjetivo.hda.push(line);
-        else if (/motivo/i.test(line)) result.subjetivo.motivoInternacao.push(line);
-        else if (/antecedentes|pregressa/i.test(line)) result.subjetivo.antecedentes.push(line);
-        else result.subjetivo.infoSubjetivaAtual.push(line);
+        if (/hda|hist[óo]ria da doen[çc]a/i.test(line)) {
+          result.subjetivo.hda.push(line);
+          // Capturar conteúdo subsequente
+          const content = captureSubsequentContent(lines, i);
+          if (content.length > 0) {
+            result.subjetivo.hda.push(...content);
+            i += content.length;
+          }
+        }
+        else if (/motivo/i.test(line)) {
+          result.subjetivo.motivoInternacao.push(line);
+          const content = captureSubsequentContent(lines, i);
+          if (content.length > 0) {
+            result.subjetivo.motivoInternacao.push(...content);
+            i += content.length;
+          }
+        }
+        else if (/antecedentes|pregressa/i.test(line)) {
+          result.subjetivo.antecedentes.push(line);
+          const content = captureSubsequentContent(lines, i);
+          if (content.length > 0) {
+            result.subjetivo.antecedentes.push(...content);
+            i += content.length;
+          }
+        }
+        else {
+          result.subjetivo.infoSubjetivaAtual.push(line);
+          const content = captureSubsequentContent(lines, i);
+          if (content.length > 0) {
+            result.subjetivo.infoSubjetivaAtual.push(...content);
+            i += content.length;
+          }
+        }
         break;
       case 'sinaisVitais':
         result.sinaisVitais.push(line);
@@ -372,14 +434,30 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
       case 'microbiologia':
         // Detecta culturas positivas por palavras-chave ou microrganismos conhecidos
         const hasPositiveKeyword = /positiv[oa]|crescimento|isolad[oa]/i.test(line);
-        const hasKnownMicroorganism = /kpc|mrsa|esbl|e\. coli|pseudomonas|acinetobacter|candida|enterobact|staphylococcus|streptococcus|klebsiella|proteus|serratia|enterococcus/i.test(line);
+        const hasKnownMicroorganism = /kpc|mrsa|esbl|e\. coli|pseudomonas|acinetobacter|candida|enterobact|staphylococcus|streptococcus|klebsiella|proteus|serratia|enterococcus|clostridium/i.test(line);
         const hasNegativeKeyword = /negativ[oa]|sem crescimento/i.test(line);
         const hasColonization = /coloniza/i.test(line);
+        const hasPendingKeyword = /aguardar resultado|pendente|em an[áa]lise/i.test(line);
+        
+        // Prioridade: microrganismo conhecido > palavra-chave positiva > pendente > negativa > colonização
+        let situacao: 'positiva' | 'negativa' | 'colonizacao' | 'pendente' = 'pendente';
+        
+        if (hasKnownMicroorganism && !hasPendingKeyword) {
+          situacao = 'positiva';
+        } else if (hasPositiveKeyword && !hasPendingKeyword) {
+          situacao = 'positiva';
+        } else if (hasPendingKeyword) {
+          situacao = 'pendente';
+        } else if (hasNegativeKeyword) {
+          situacao = 'negativa';
+        } else if (hasColonization) {
+          situacao = 'colonizacao';
+        }
         
         result.microbiologia.push({
           material: line,
           dataColeta: timestamp,
-          situacao: (hasPositiveKeyword || hasKnownMicroorganism) ? 'positiva' : hasNegativeKeyword ? 'negativa' : hasColonization ? 'colonizacao' : 'pendente',
+          situacao,
           source,
         });
         break;
@@ -705,9 +783,19 @@ function buildClinicalData(base: ExtractionResult, atual: ExtractionResult): { d
     }
     
     // Listar infecções
-    const culturaPositiva = objetivo.microbiologia.find(c => c.situacao === 'positiva');
-    if (culturaPositiva) {
-      problemas.push(`Infecção documentada: ${culturaPositiva.material}`);
+    const culturasPositivas = objetivo.microbiologia.filter(c => c.situacao === 'positiva');
+    if (culturasPositivas.length > 0) {
+      // Extrair apenas os microrganismos ou informações essenciais
+      const microrganismos = culturasPositivas.map(c => {
+        // Tentar extrair microrganismo do material
+        const match = c.material.match(/(KPC|MRSA|ESBL|E\. COLI|PSEUDOMONAS|ACINETOBACTER|CANDIDA|ENTEROBACTER|CLOSTRIDIUM)/i);
+        if (match) {
+          return match[1].toUpperCase();
+        }
+        // Se não encontrar microrganismo, usar primeira parte do material
+        return c.material.split(':')[0].trim();
+      });
+      problemas.push(`Infecção documentada: ${microrganismos.join(', ')}`);
     }
     
     if (problemas.length > 0) {
@@ -935,14 +1023,26 @@ function filterFormFragments(data: ClinicalData): ClinicalData {
   const newData = JSON.parse(JSON.stringify(data)) as ClinicalData;
   
   const filterFragment = (value: string): boolean => {
-    // Remover checkboxes não preenchidos (todos com espaço)
-    if (/\([ ]\)/.test(value) && !/\(X\)/i.test(value)) return false;
-    
-    // Remover campos vazios de formulário (apenas label sem valor)
-    if (/^[\w\s]+:\s*$/.test(value)) return false;
+    // Remover linhas vazias ou apenas espaços
+    if (!value.trim()) return false;
     
     // Remover linhas muito curtas sem significado clínico
     if (value.trim().length < 3) return false;
+    
+    // Remover cabeçalhos vazios (apenas label seguido de :)
+    if (/^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ\s]+:\s*$/i.test(value)) return false;
+    
+    // Remover formulários de checkbox não preenchidos
+    // Ex: "ESCARA: SIM ( ) NÃO (X) QUAL: MUDANÇA DE DECÚBITO"
+    if (/ESCARA.*SIM.*\(.*\).*NÃO.*\(.*X.*\)/i.test(value)) {
+      // Interpretar: se NÃO está marcado, não há escara
+      return false;
+    }
+    
+    // Remover linhas que são apenas labels de formulários
+    if (/^(MEDICAÇÕES DE USO CONTINUO|PROFILAXIAS|DROGAS VASOATIVAS|INTERCONSULTAS|EXAMES DE MAIOR IMPORTÂNCIA|EXAME CLINICO|SEDAÇÃO\/?\s*ANALGESIA|ANTECEDENTES PATOLÓGICOS E CIRÚRGICOS|ANTECEDENTES PESSOAIS):\s*$/i.test(value)) {
+      return false;
+    }
     
     return true;
   };
@@ -951,6 +1051,21 @@ function filterFormFragments(data: ClinicalData): ClinicalData {
   const sections = ['sinaisVitais', 'neurologico', 'cardiovascular', 'respiratorio', 'renal', 'gastrointestinal', 'extremidades', 'dispositivos'] as const;
   for (const section of sections) {
     newData.objetivo[section] = data.objetivo[section].filter((d: DataPoint) => filterFragment(d.value));
+  }
+  
+  // Filtrar também exames laboratoriais
+  newData.objetivo.examesLaboratoriais = data.objetivo.examesLaboratoriais.filter((e: ExameLaboratorial) => {
+    return filterFragment(e.nome);
+  });
+  
+  // Filtrar subjetivo
+  newData.subjetivo.antecedentes = data.subjetivo.antecedentes.filter((d: DataPoint) => filterFragment(d.value));
+  newData.subjetivo.hda = data.subjetivo.hda.filter((d: DataPoint) => filterFragment(d.value));
+  
+  // Filtrar plano
+  const planoSections = ['condutasPorProblema', 'antimicrobianos', 'suporteVentilatorio', 'medidasHemodinamicas', 'controleRenal', 'nutricao', 'profilaxias', 'examesInterconsultas', 'metasTerapeuticas', 'reavaliacoes'] as const;
+  for (const section of planoSections) {
+    newData.plano[section] = data.plano[section].filter((d: DataPoint) => filterFragment(d.value));
   }
   
   return newData;
