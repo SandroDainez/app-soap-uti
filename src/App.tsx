@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { processEvolution, formatSoapFinal, formatSoapSimple, type ProcessedEvolution, type ClinicalData, type Alerta, type Diagnostico } from './utils/soap-engine';
+import AuditTest from './AuditTest';
 
 // ====== TOAST ======
 interface ToastMessage { id: number; text: string; type: 'success' | 'error' | 'info'; }
@@ -72,7 +73,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 // ====== MAIN APP ======
-type AppStep = 'input' | 'review' | 'final';
+type AppStep = 'input' | 'review' | 'final' | 'audit';
 
 function App() {
   const [step, setStep] = useState<AppStep>('input');
@@ -236,6 +237,7 @@ function App() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={() => setStep('audit')} style={{ padding: '8px 12px', fontSize: '13px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>🔍 Auditoria</button>
             {step !== 'input' && (
               <button onClick={handleBackToInput} style={{ padding: '8px 12px', fontSize: '13px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>← Voltar</button>
             )}
@@ -248,6 +250,9 @@ function App() {
       </header>
 
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px 16px' }}>
+        {/* AUDIT TEST */}
+        {step === 'audit' && <AuditTest />}
+
         {/* STEP 1: INPUT */}
         {step === 'input' && (
           <>
