@@ -1,26 +1,236 @@
 import { useState, useCallback } from 'react';
-import {
-  Clipboard,
-  ClipboardCheck,
-  FileText,
-  Plus,
-  Trash2,
-  Copy,
-  RefreshCw,
-  Heart,
-  Activity,
-  Brain,
-  Droplets,
-  Wind,
-  TestTube,
-  Shield,
-  Stethoscope,
-  ChevronDown,
-  ChevronUp,
-  AlertCircle,
-  CheckCircle2,
-} from 'lucide-react';
-import { parseRawText, formatSoapForDisplay, formatSoapSimple, createEmptySoap, type SoapData } from './utils/parser';
+
+interface SoapData {
+  identificacao: string;
+  diagnosticoAdmissao: string;
+  subjetivo: string;
+  objetivo: {
+    sinaisVitais: string;
+    hemodinamica: string;
+    respiratorio: string;
+    neurologico: string;
+    renal: string;
+    gastrointestinal: string;
+    hematologico: string;
+    infectologico: string;
+    metabolico: string;
+    examesLaboratoriais: string;
+    dispositivos: string;
+    escores: string;
+  };
+  avaliacao: string;
+  plano: string;
+  informacoesAdicionais: string;
+}
+
+function createEmptySoap(): SoapData {
+  return {
+    identificacao: '',
+    diagnosticoAdmissao: '',
+    subjetivo: '',
+    objetivo: {
+      sinaisVitais: '',
+      hemodinamica: '',
+      respiratorio: '',
+      neurologico: '',
+      renal: '',
+      gastrointestinal: '',
+      hematologico: '',
+      infectologico: '',
+      metabolico: '',
+      examesLaboratoriais: '',
+      dispositivos: '',
+      escores: '',
+    },
+    avaliacao: '',
+    plano: '',
+    informacoesAdicionais: '',
+  };
+}
+
+function extractSection(text: string, keywords: string[]): string {
+  const lines = text.split('\n');
+  const results: string[] = [];
+  for (const line of lines) {
+    const lowerLine = line.toLowerCase().trim();
+    for (const keyword of keywords) {
+      if (lowerLine.includes(keyword.toLowerCase())) {
+        results.push(line.trim());
+        break;
+      }
+    }
+  }
+  return results.join('\n');
+}
+
+function extractByHeader(text: string, header: string): string {
+  const lines = text.split('\n');
+  let capturing = false;
+  const results: string[] = [];
+  for (const line of lines) {
+    const lowerLine = line.toLowerCase().trim();
+    if (lowerLine.includes(header.toLowerCase())) {
+      capturing = true;
+      continue;
+    }
+    if (capturing) {
+      if (line.trim().length > 0 && line.trim().length < 50 && /^[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ]/.test(line.trim()) && line.trim().includes(':')) {
+        break;
+      }
+      if (line.trim()) {
+        results.push(line.trim());
+      }
+    }
+  }
+  return results.join('\n');
+}
+
+function parseRawText(rawText: string, additionalInfo: string): SoapData {
+  const soap = createEmptySoap();
+
+  const idKeywords = ['paciente', 'nome', 'idade', 'leito', 'quarto', 'prontuário', 'internação', 'dia de uti', 'dx de admissão', 'diagnóstico de admissão'];
+  soap.identificacao = extractSection(rawText, idKeywords);
+
+  const dxKeywords = ['dx de admissão', 'diagnóstico de admissão', 'diagnostico de admissao', 'motivo internação', 'motivo da internação'];
+  soap.diagnosticoAdmissao = extractSection(rawText, dxKeywords);
+
+  const subKeywords = ['subjetivo', 'queixa', 'história', 'historia', 'relata', 'refere', 'acompanhante', 'família', 'sintoma'];
+  soap.subjetivo = extractSection(rawText, subKeywords);
+
+  const svKeywords = ['pa ', 'pa:', 'pressão arterial', 'fc ', 'fc:', 'frequência cardíaca', 'fr ', 'fr:', 'frequência respiratória', 'temp', 'temperatura', 'spo2', 'saturação', 'saturacao', 'tmax', 'sinais vitais', 'ta:', 'pam', 'sv:'];
+  soap.objetivo.sinaisVitais = extractSection(rawText, svKeywords);
+
+  const hemoKeywords = ['hemodinâmica', 'hemodinamica', 'vasopressor', 'noradrenalina', 'adrenalina', 'vasopressina', 'dobutamina', 'débito cardíaco', 'picc', 'cvc', 'pvc'];
+  soap.objetivo.hemodinamica = extractSection(rawText, hemoKeywords);
+
+  const respKeywords = ['respiratório', 'respiratorio', 'vm ', 'vm:', 'ventilação', 'ventilacao', 'ventilatório', 'ventilatorio', 'peep', 'fio2', 'pplat', 'pico', 'weaning', 'extubação', 'extubacao', 'traqueostomia', 'oxigênio', 'oxigenio', 'gasometria', 'pco2', 'po2'];
+  soap.objetivo.respiratorio = extractSection(rawText, respKeywords);
+
+  const neuroKeywords = ['neurológico', 'neurologico', 'glasgow', 'pupilas', 'sedação', 'sedacao', 'rass', 'richmond', 'delirium', 'cam-icu', 'convulsão', 'focalidade', 'midríase', 'isocóricas', 'isocoricas'];
+  soap.objetivo.neurologico = extractSection(rawText, neuroKeywords);
+
+  const renalKeywords = ['renal', 'diurese', 'urina', 'creatinina', 'ureia', 'hemodiálise', 'hemodialise', 'balanço hídrico', 'balanco hidrico', 'bhd', 'edema'];
+  soap.objetivo.renal = extractSection(rawText, renalKeywords);
+
+  const giKeywords = ['gastrointestinal', 'hepático', 'hepatico', 'abdome', 'abdominal', 'dieta', 'nutrição', 'nutricao', 'sng', 'evacuação', 'evacuacao', 'ascite', 'distensão', 'rha'];
+  soap.objetivo.gastrointestinal = extractSection(rawText, giKeywords);
+
+  const hemaKeywords = ['hematológico', 'hematologico', 'hemoglobina', 'hematócrito', 'hematocrito', 'plaquetas', 'leucócitos', 'leucocitos', 'coagulograma', 'inr', 'transfusão', 'transfusao', 'anemia', 'sangramento'];
+  soap.objetivo.hematologico = extractSection(rawText, hemaKeywords);
+
+  const infKeywords = ['infecto', 'infecção', 'infeccao', 'procalcitonina', 'cultura', 'hemocultura', 'antibiótico', 'antibiotico', 'meropenem', 'piperacilina', 'vancomicina', 'febre', 'sepsis', 'sépsis', 'pct'];
+  soap.objetivo.infectologico = extractSection(rawText, infKeywords);
+
+  const metKeywords = ['metabólico', 'metabolico', 'glicemia', 'glicose', 'insulina', 'sódio', 'sodio', 'potássio', 'potassio', 'cálcio', 'calcio', 'magnésio', 'magnesio', 'lactato', 'acidose', 'alcalose', 'eletrólitos'];
+  soap.objetivo.metabolico = extractSection(rawText, metKeywords);
+
+  const examKeywords = ['exame', 'laboratório', 'laboratorio', 'tc ', 'raio-x', 'rx ', 'ecocardiograma', 'tomografia', 'ultrassom', 'biópsia', 'resultado'];
+  soap.objetivo.examesLaboratoriais = extractSection(rawText, examKeywords);
+
+  const devKeywords = ['dispositivo', 'dreno', 'sonda', 'jal', 'arterial', 'acesso venoso', 'acesso arterial', 'iot', 'tqt'];
+  soap.objetivo.dispositivos = extractSection(rawText, devKeywords);
+
+  const scoreKeywords = ['escore', 'sofa', 'apache', 'rass', 'cam-icu', 'qsofa', 'score'];
+  soap.objetivo.escores = extractSection(rawText, scoreKeywords);
+
+  const avalKeywords = ['avaliação', 'avaliacao', 'hipótese', 'hipotese', 'diagnóstico atual', 'quadro', 'evolução', 'evolucao', 'melhora', 'piora', 'estável', 'estavel', 'grave', 'crítico', 'critico'];
+  soap.avaliacao = extractSection(rawText, avalKeywords);
+
+  const planKeywords = ['plano', 'conduta', 'prescrição', 'prescricao', 'medicação', 'medicacao', 'ajuste', 'manter', 'suspender', 'iniciar', 'trocar', 'meta', 'solicitar', 'interconsulta', 'procedimento'];
+  soap.plano = extractSection(rawText, planKeywords);
+
+  if (additionalInfo.trim()) {
+    soap.informacoesAdicionais = additionalInfo.trim();
+
+    const additionalLower = additionalInfo.toLowerCase();
+    if (additionalLower.includes('sv:') || additionalLower.includes('sinais vitais')) {
+      const svSection = extractByHeader(additionalInfo, 'sv:') || extractByHeader(additionalInfo, 'sinais vitais');
+      if (svSection) soap.objetivo.sinaisVitais = svSection;
+    }
+    if (additionalLower.includes('plano:') || additionalLower.includes('conduta')) {
+      const planSection = extractByHeader(additionalInfo, 'plano:') || extractByHeader(additionalInfo, 'conduta');
+      if (planSection) soap.plano = planSection;
+    }
+    if (additionalLower.includes('avaliação:') || additionalLower.includes('avaliacao:')) {
+      const avalSection = extractByHeader(additionalInfo, 'avaliação:') || extractByHeader(additionalInfo, 'avaliacao:');
+      if (avalSection) soap.avaliacao = avalSection;
+    }
+  }
+
+  return soap;
+}
+
+function formatSoapForDisplay(soap: SoapData): string {
+  let output = '';
+  output += '═══════════════════════════════════════\n';
+  output += '         EVOLUÇÃO MÉDICA - UTI\n';
+  output += '═══════════════════════════════════════\n\n';
+  if (soap.identificacao) {
+    output += '▸ IDENTIFICAÇÃO:\n' + soap.identificacao + '\n\n';
+  }
+  if (soap.diagnosticoAdmissao) {
+    output += '▸ DIAGNÓSTICO DE ADMISSÃO:\n' + soap.diagnosticoAdmissao + '\n\n';
+  }
+  output += '───────────────────────────────────────\n';
+  output += 'S - SUBJETIVO\n';
+  output += '───────────────────────────────────────\n';
+  output += (soap.subjetivo || 'Não informado') + '\n\n';
+  output += '───────────────────────────────────────\n';
+  output += 'O - OBJETIVO\n';
+  output += '───────────────────────────────────────\n\n';
+  if (soap.objetivo.sinaisVitais) output += '  • Sinais Vitais:\n    ' + soap.objetivo.sinaisVitais.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.hemodinamica) output += '  • Hemodinâmica:\n    ' + soap.objetivo.hemodinamica.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.respiratorio) output += '  • Respiratório:\n    ' + soap.objetivo.respiratorio.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.neurologico) output += '  • Neurológico:\n    ' + soap.objetivo.neurologico.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.renal) output += '  • Renal:\n    ' + soap.objetivo.renal.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.gastrointestinal) output += '  • Gastrointestinal:\n    ' + soap.objetivo.gastrointestinal.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.hematologico) output += '  • Hematológico:\n    ' + soap.objetivo.hematologico.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.infectologico) output += '  • Infectológico:\n    ' + soap.objetivo.infectologico.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.metabolico) output += '  • Metabólico:\n    ' + soap.objetivo.metabolico.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.examesLaboratoriais) output += '  • Exames:\n    ' + soap.objetivo.examesLaboratoriais.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.dispositivos) output += '  • Dispositivos:\n    ' + soap.objetivo.dispositivos.replace(/\n/g, '\n    ') + '\n\n';
+  if (soap.objetivo.escores) output += '  • Escores:\n    ' + soap.objetivo.escores.replace(/\n/g, '\n    ') + '\n\n';
+  output += '───────────────────────────────────────\n';
+  output += 'A - AVALIAÇÃO\n';
+  output += '───────────────────────────────────────\n';
+  output += (soap.avaliacao || 'Não informado') + '\n\n';
+  output += '───────────────────────────────────────\n';
+  output += 'P - PLANO\n';
+  output += '───────────────────────────────────────\n';
+  output += (soap.plano || 'Não informado') + '\n\n';
+  if (soap.informacoesAdicionais) {
+    output += '───────────────────────────────────────\n';
+    output += '▸ INFORMAÇÕES ADICIONAIS\n';
+    output += '───────────────────────────────────────\n';
+    output += soap.informacoesAdicionais + '\n\n';
+  }
+  output += '═══════════════════════════════════════\n';
+  return output;
+}
+
+function formatSoapSimple(soap: SoapData): string {
+  let output = '';
+  output += 'EVOLUÇÃO MÉDICA - UTI\n\n';
+  if (soap.identificacao) output += 'IDENTIFICAÇÃO:\n' + soap.identificacao + '\n\n';
+  if (soap.diagnosticoAdmissao) output += 'DIAGNÓSTICO DE ADMISSÃO:\n' + soap.diagnosticoAdmissao + '\n\n';
+  output += 'S - SUBJETIVO:\n' + (soap.subjetivo || '-') + '\n\n';
+  output += 'O - OBJETIVO:\n';
+  if (soap.objetivo.sinaisVitais) output += 'SV: ' + soap.objetivo.sinaisVitais + '\n';
+  if (soap.objetivo.hemodinamica) output += 'Hemodinâmica: ' + soap.objetivo.hemodinamica + '\n';
+  if (soap.objetivo.respiratorio) output += 'Respiratório: ' + soap.objetivo.respiratorio + '\n';
+  if (soap.objetivo.neurologico) output += 'Neurológico: ' + soap.objetivo.neurologico + '\n';
+  if (soap.objetivo.renal) output += 'Renal: ' + soap.objetivo.renal + '\n';
+  if (soap.objetivo.gastrointestinal) output += 'GI: ' + soap.objetivo.gastrointestinal + '\n';
+  if (soap.objetivo.hematologico) output += 'Hematológico: ' + soap.objetivo.hematologico + '\n';
+  if (soap.objetivo.infectologico) output += 'Infecto: ' + soap.objetivo.infectologico + '\n';
+  if (soap.objetivo.metabolico) output += 'Metabólico: ' + soap.objetivo.metabolico + '\n';
+  if (soap.objetivo.examesLaboratoriais) output += 'Exames: ' + soap.objetivo.examesLaboratoriais + '\n';
+  if (soap.objetivo.dispositivos) output += 'Dispositivos: ' + soap.objetivo.dispositivos + '\n';
+  if (soap.objetivo.escores) output += 'Escores: ' + soap.objetivo.escores + '\n';
+  output += '\nA - AVALIAÇÃO:\n' + (soap.avaliacao || '-') + '\n\n';
+  output += 'P - PLANO:\n' + (soap.plano || '-') + '\n';
+  return output;
+}
 
 function App() {
   const [rawText, setRawText] = useState('');
@@ -74,247 +284,252 @@ function App() {
   const getObjectiveSections = () => {
     if (!soapData) return [];
     return [
-      { key: 'sinaisVitais', label: 'Sinais Vitais', icon: <Activity size={16} />, content: soapData.objetivo.sinaisVitais },
-      { key: 'hemodinamica', label: 'Hemodinâmica', icon: <Heart size={16} />, content: soapData.objetivo.hemodinamica },
-      { key: 'respiratorio', label: 'Respiratório', icon: <Wind size={16} />, content: soapData.objetivo.respiratorio },
-      { key: 'neurologico', label: 'Neurológico', icon: <Brain size={16} />, content: soapData.objetivo.neurologico },
-      { key: 'renal', label: 'Renal', icon: <Droplets size={16} />, content: soapData.objetivo.renal },
-      { key: 'gastrointestinal', label: 'Gastrointestinal', icon: <Stethoscope size={16} />, content: soapData.objetivo.gastrointestinal },
-      { key: 'hematologico', label: 'Hematológico', icon: <TestTube size={16} />, content: soapData.objetivo.hematologico },
-      { key: 'infectologico', label: 'Infectológico', icon: <Shield size={16} />, content: soapData.objetivo.infectologico },
-      { key: 'metabolico', label: 'Metabólico', icon: <Activity size={16} />, content: soapData.objetivo.metabolico },
-      { key: 'examesLaboratoriais', label: 'Exames Complementares', icon: <TestTube size={16} />, content: soapData.objetivo.examesLaboratoriais },
-      { key: 'dispositivos', label: 'Dispositivos', icon: <FileText size={16} />, content: soapData.objetivo.dispositivos },
-      { key: 'escores', label: 'Escores', icon: <AlertCircle size={16} />, content: soapData.objetivo.escores },
+      { key: 'sinaisVitais', label: 'Sinais Vitais', emoji: '💓', content: soapData.objetivo.sinaisVitais },
+      { key: 'hemodinamica', label: 'Hemodinâmica', emoji: '🫀', content: soapData.objetivo.hemodinamica },
+      { key: 'respiratorio', label: 'Respiratório', emoji: '🫁', content: soapData.objetivo.respiratorio },
+      { key: 'neurologico', label: 'Neurológico', emoji: '🧠', content: soapData.objetivo.neurologico },
+      { key: 'renal', label: 'Renal', emoji: '💧', content: soapData.objetivo.renal },
+      { key: 'gastrointestinal', label: 'Gastrointestinal', emoji: '🩺', content: soapData.objetivo.gastrointestinal },
+      { key: 'hematologico', label: 'Hematológico', emoji: '🩸', content: soapData.objetivo.hematologico },
+      { key: 'infectologico', label: 'Infectológico', emoji: '🛡️', content: soapData.objetivo.infectologico },
+      { key: 'metabolico', label: 'Metabólico', emoji: '⚡', content: soapData.objetivo.metabolico },
+      { key: 'examesLaboratoriais', label: 'Exames Complementares', emoji: '🔬', content: soapData.objetivo.examesLaboratoriais },
+      { key: 'dispositivos', label: 'Dispositivos', emoji: '📎', content: soapData.objetivo.dispositivos },
+      { key: 'escores', label: 'Escores', emoji: '📊', content: soapData.objetivo.escores },
     ].filter(s => hasContent(s.content));
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)', color: '#e2e8f0' }}>
       {/* Header */}
-      <header className="bg-slate-800/80 backdrop-blur-sm border-b border-slate-700 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center shadow-lg">
-              <Stethoscope className="text-white" size={22} />
+      <header style={{ background: 'rgba(30,41,59,0.9)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #334155', position: 'sticky', top: 0, zIndex: 50 }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '40px', height: '40px', background: 'linear-gradient(135deg, #10b981, #0d9488)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+              🏥
             </div>
             <div>
-              <h1 className="text-lg font-bold text-white">Evolução Médica UTI</h1>
-              <p className="text-xs text-slate-400">Formato SOAP Modificado</p>
+              <h1 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff', margin: 0 }}>Evolução Médica UTI</h1>
+              <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Formato SOAP Modificado</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleClear}
-              className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors flex items-center gap-2"
-            >
-              <Trash2 size={14} />
-              Limpar
-            </button>
-          </div>
+          <button
+            onClick={handleClear}
+            style={{ padding: '8px 12px', fontSize: '14px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+          >
+            🗑️ Limpar
+          </button>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px 16px' }}>
         {/* Input Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '24px', marginBottom: '24px' }}>
           {/* Raw Text Input */}
-          <div className="bg-slate-800/60 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center gap-2">
-              <Clipboard size={18} className="text-emerald-400" />
-              <h2 className="text-sm font-semibold text-white">Informações Brutas</h2>
-              <span className="text-xs text-slate-400 ml-auto">Cole aqui os dados do paciente</span>
+          <div style={{ background: 'rgba(30,41,59,0.6)', borderRadius: '12px', border: '1px solid #334155', overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>📋</span>
+              <h2 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Informações Brutas</h2>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: 'auto' }}>Cole aqui os dados do paciente</span>
             </div>
             <textarea
               value={rawText}
               onChange={(e) => setRawText(e.target.value)}
-              placeholder={`Cole aqui todas as informações do paciente...\n\nExemplo:\nPaciente João Silva, 65 anos, leito 302, 5° dia de UTI\nDX admissão: Choque séptico de foco pulmonar\n\nSV: PA 110/65, FC 88, FR 18, Temp 37.2, SpO2 95%\nHemodinâmica: Noradrenalina 0.1 mcg/kg/min, PAM 72\nRespiratório: VM - PCV, PEEP 8, FiO2 40%, Pplat 28\nNeurológico: Glasgow 14, RASS -1, pupilas isocóricas\nRenal: Diurese 800ml/24h, Cr 1.8\n\nPlano: Manter antibioticoterapia, weaning respiratório, reavaliação em 6h`}
-              className="w-full h-64 p-4 bg-slate-900/50 text-slate-200 text-sm font-mono placeholder-slate-500 resize-none focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+              placeholder={`Cole aqui todas as informações do paciente...\n\nExemplo:\nPaciente João Silva, 65 anos, leito 302, 5° dia de UTI\nDX admissão: Choque séptico de foco pulmonar\n\nSV: PA 110/65, FC 88, FR 18, Temp 37.2, SpO2 95%\nHemodinâmica: Noradrenalina 0.1 mcg/kg/min, PAM 72\nRespiratório: VM - PCV, PEEP 8, FiO2 40%, Pplat 28\nNeurológico: Glasgow 14, RASS -1, pupilas isocóricas\nRenal: Diurese 800ml/24h, Cr 1.8\n\nPlano: Manter antibioticoterapia, weaning respiratório`}
+              style={{ width: '100%', height: '256px', padding: '16px', background: 'rgba(15,23,42,0.5)', color: '#e2e8f0', fontSize: '13px', fontFamily: 'monospace', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
             />
           </div>
 
           {/* Additional Info Input */}
-          <div className="bg-slate-800/60 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center gap-2">
-              <Plus size={18} className="text-amber-400" />
-              <h2 className="text-sm font-semibold text-white">Informações Adicionais / Correções</h2>
-              <span className="text-xs text-slate-400 ml-auto">Substituem/complementam dados colados</span>
+          <div style={{ background: 'rgba(30,41,59,0.6)', borderRadius: '12px', border: '1px solid #334155', overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '18px' }}>✏️</span>
+              <h2 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Informações Adicionais / Correções</h2>
+              <span style={{ fontSize: '11px', color: '#94a3b8', marginLeft: 'auto' }}>Substituem/complementam dados</span>
             </div>
             <textarea
               value={additionalInfo}
               onChange={(e) => setAdditionalInfo(e.target.value)}
-              placeholder={`Adicione informações que devem SUBSTITUIR ou COMPLEMENTAR os dados colados.\n\nUse cabeçalhos para substituir seções específicas:\n\nSV: PA 120/70, FC 75, Temp 36.8\nPlano: Suspender noradrenalina, iniciar dieta oral\nAvaliação: Paciente estável, melhora progressiva\n\nOu simplesmente adicione informações gerais que serão incluídas como complemento.`}
-              className="w-full h-64 p-4 bg-slate-900/50 text-slate-200 text-sm font-mono placeholder-slate-500 resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+              placeholder={`Adicione informações que devem SUBSTITUIR ou COMPLEMENTAR os dados colados.\n\nUse cabeçalhos para substituir seções:\n\nSV: PA 120/70, FC 75, Temp 36.8\nPlano: Suspender noradrenalina, iniciar dieta oral\nAvaliação: Paciente estável, melhora progressiva\n\nOu adicione informações gerais como complemento.`}
+              style={{ width: '100%', height: '256px', padding: '16px', background: 'rgba(15,23,42,0.5)', color: '#e2e8f0', fontSize: '13px', fontFamily: 'monospace', border: 'none', resize: 'none', outline: 'none', boxSizing: 'border-box' }}
             />
           </div>
         </div>
 
         {/* Process Button */}
-        <div className="flex justify-center mb-6">
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '24px' }}>
           <button
             onClick={handleProcess}
             disabled={!rawText.trim()}
-            className="px-8 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-600 disabled:to-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-xl shadow-lg shadow-emerald-900/30 transition-all duration-200 flex items-center gap-3 text-base"
+            style={{
+              padding: '12px 32px',
+              background: rawText.trim() ? 'linear-gradient(135deg, #059669, #0d9488)' : '#475569',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: '16px',
+              border: 'none',
+              borderRadius: '12px',
+              cursor: rawText.trim() ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              boxShadow: rawText.trim() ? '0 4px 14px rgba(5,150,105,0.3)' : 'none',
+            }}
           >
-            <RefreshCw size={20} />
-            Organizar em Formato SOAP
+            🔄 Organizar em Formato SOAP
           </button>
         </div>
 
         {/* Results */}
         {soapData && (
-          <div className="bg-slate-800/60 backdrop-blur-sm rounded-xl border border-slate-700 overflow-hidden">
+          <div style={{ background: 'rgba(30,41,59,0.6)', borderRadius: '12px', border: '1px solid #334155', overflow: 'hidden' }}>
             {/* Results Header */}
-            <div className="px-4 py-3 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 size={18} className="text-emerald-400" />
-                <h2 className="text-sm font-semibold text-white">Evolução Organizada</h2>
+            <div style={{ padding: '12px 16px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '18px' }}>✅</span>
+                <h2 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', margin: 0 }}>Evolução Organizada</h2>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex bg-slate-700 rounded-lg p-0.5">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', background: '#334155', borderRadius: '8px', padding: '2px' }}>
                   <button
                     onClick={() => setViewMode('structured')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      viewMode === 'structured' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
-                    }`}
+                    style={{
+                      padding: '6px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '6px', border: 'none', cursor: 'pointer',
+                      background: viewMode === 'structured' ? '#059669' : 'transparent',
+                      color: viewMode === 'structured' ? '#fff' : '#94a3b8',
+                    }}
                   >
                     Estruturado
                   </button>
                   <button
                     onClick={() => setViewMode('text')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      viewMode === 'text' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
-                    }`}
+                    style={{
+                      padding: '6px 12px', fontSize: '12px', fontWeight: 500, borderRadius: '6px', border: 'none', cursor: 'pointer',
+                      background: viewMode === 'text' ? '#059669' : 'transparent',
+                      color: viewMode === 'text' ? '#fff' : '#94a3b8',
+                    }}
                   >
                     Texto
                   </button>
                 </div>
                 <button
                   onClick={handleCopySimple}
-                  className="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors flex items-center gap-1.5"
+                  style={{ padding: '6px 12px', fontSize: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
                 >
-                  {copiedSimple ? <ClipboardCheck size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                  {copiedSimple ? 'Copiado!' : 'Copiar Simples'}
+                  {copiedSimple ? '✅ Copiado!' : '📄 Copiar Simples'}
                 </button>
                 <button
                   onClick={handleCopyFull}
-                  className="px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg transition-colors flex items-center gap-1.5"
+                  style={{ padding: '6px 12px', fontSize: '12px', background: '#059669', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
                 >
-                  {copied ? <ClipboardCheck size={12} /> : <Copy size={12} />}
-                  {copied ? 'Copiado!' : 'Copiar Completo'}
+                  {copied ? '✅ Copiado!' : '📋 Copiar Completo'}
                 </button>
               </div>
             </div>
 
             {/* Results Content */}
-            <div className="p-4">
+            <div style={{ padding: '16px' }}>
               {viewMode === 'text' ? (
-                <pre className="text-sm text-slate-200 font-mono whitespace-pre-wrap bg-slate-900/50 rounded-lg p-4 overflow-x-auto">
+                <pre style={{ fontSize: '13px', color: '#e2e8f0', fontFamily: 'monospace', whiteSpace: 'pre-wrap', background: 'rgba(15,23,42,0.5)', borderRadius: '8px', padding: '16px', overflowX: 'auto', margin: 0 }}>
                   {formatSoapForDisplay(soapData)}
                 </pre>
               ) : (
-                <div className="space-y-3">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* Identificação */}
                   {hasContent(soapData.identificacao) && (
-                    <SectionCard
+                    <CollapsibleSection
                       title="Identificação"
-                      icon={<FileText size={16} className="text-blue-400" />}
+                      emoji="📝"
                       content={soapData.identificacao}
                       expanded={expandedSections.identificacao}
                       onToggle={() => toggleSection('identificacao')}
-                      color="blue"
+                      borderColor="#3b82f6"
                     />
                   )}
 
-                  {/* Diagnóstico de Admissão */}
+                  {/* Diagnóstico */}
                   {hasContent(soapData.diagnosticoAdmissao) && (
-                    <SectionCard
+                    <CollapsibleSection
                       title="Diagnóstico de Admissão"
-                      icon={<AlertCircle size={16} className="text-red-400" />}
+                      emoji="🔴"
                       content={soapData.diagnosticoAdmissao}
                       expanded={expandedSections.identificacao}
                       onToggle={() => toggleSection('identificacao')}
-                      color="red"
+                      borderColor="#ef4444"
                     />
                   )}
 
                   {/* Subjetivo */}
-                  <SectionCard
+                  <CollapsibleSection
                     title="S - Subjetivo"
-                    icon={<Clipboard size={16} className="text-purple-400" />}
+                    emoji="💬"
                     content={soapData.subjetivo || 'Não informado'}
                     expanded={expandedSections.subjetivo}
                     onToggle={() => toggleSection('subjetivo')}
-                    color="purple"
+                    borderColor="#a855f7"
                   />
 
                   {/* Objetivo */}
-                  <div className="bg-slate-900/40 rounded-xl border border-slate-700 overflow-hidden">
+                  <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '12px', border: '1px solid #334155', overflow: 'hidden' }}>
                     <button
                       onClick={() => toggleSection('objetivo')}
-                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-800/50 transition-colors"
+                      style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: '#fff' }}
                     >
-                      <div className="flex items-center gap-2">
-                        <Activity size={16} className="text-emerald-400" />
-                        <span className="text-sm font-semibold text-white">O - Objetivo</span>
-                        <span className="text-xs text-slate-400">
-                          ({getObjectiveSections().length} itens)
-                        </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '16px' }}>🔍</span>
+                        <span style={{ fontSize: '14px', fontWeight: 600 }}>O - Objetivo</span>
+                        <span style={{ fontSize: '11px', color: '#94a3b8' }}>({getObjectiveSections().length} itens)</span>
                       </div>
-                      {expandedSections.objetivo ? (
-                        <ChevronUp size={16} className="text-slate-400" />
-                      ) : (
-                        <ChevronDown size={16} className="text-slate-400" />
-                      )}
+                      <span style={{ color: '#94a3b8' }}>{expandedSections.objetivo ? '▲' : '▼'}</span>
                     </button>
                     {expandedSections.objetivo && (
-                      <div className="px-4 pb-4 space-y-2">
+                      <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         {getObjectiveSections().length > 0 ? (
                           getObjectiveSections().map((section) => (
-                            <div key={section.key} className="bg-slate-800/60 rounded-lg p-3 border border-slate-700/50">
-                              <div className="flex items-center gap-2 mb-1.5">
-                                <span className="text-emerald-400">{section.icon}</span>
-                                <span className="text-xs font-semibold text-emerald-300">{section.label}</span>
+                            <div key={section.key} style={{ background: 'rgba(30,41,59,0.6)', borderRadius: '8px', padding: '12px', border: '1px solid rgba(51,65,85,0.5)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                                <span>{section.emoji}</span>
+                                <span style={{ fontSize: '12px', fontWeight: 600, color: '#34d399' }}>{section.label}</span>
                               </div>
-                              <p className="text-sm text-slate-300 whitespace-pre-wrap font-mono">{section.content}</p>
+                              <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', fontFamily: 'monospace', margin: 0 }}>{section.content}</p>
                             </div>
                           ))
                         ) : (
-                          <p className="text-sm text-slate-500 italic">Nenhum dado objetivo identificado</p>
+                          <p style={{ fontSize: '13px', color: '#64748b', fontStyle: 'italic', margin: 0 }}>Nenhum dado objetivo identificado</p>
                         )}
                       </div>
                     )}
                   </div>
 
                   {/* Avaliação */}
-                  <SectionCard
+                  <CollapsibleSection
                     title="A - Avaliação"
-                    icon={<Brain size={16} className="text-amber-400" />}
+                    emoji="🧠"
                     content={soapData.avaliacao || 'Não informado'}
                     expanded={expandedSections.avaliacao}
                     onToggle={() => toggleSection('avaliacao')}
-                    color="amber"
+                    borderColor="#f59e0b"
                   />
 
                   {/* Plano */}
-                  <SectionCard
+                  <CollapsibleSection
                     title="P - Plano"
-                    icon={<Stethoscope size={16} className="text-teal-400" />}
+                    emoji="📋"
                     content={soapData.plano || 'Não informado'}
                     expanded={expandedSections.plano}
                     onToggle={() => toggleSection('plano')}
-                    color="teal"
+                    borderColor="#14b8a6"
                   />
 
                   {/* Informações Adicionais */}
                   {hasContent(soapData.informacoesAdicionais) && (
-                    <div className="bg-amber-900/20 rounded-xl border border-amber-700/30 overflow-hidden">
-                      <div className="px-4 py-3 flex items-center gap-2">
-                        <Plus size={16} className="text-amber-400" />
-                        <span className="text-sm font-semibold text-amber-300">Informações Adicionais</span>
+                    <div style={{ background: 'rgba(120,53,15,0.2)', borderRadius: '12px', border: '1px solid rgba(180,83,9,0.3)', overflow: 'hidden' }}>
+                      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '16px' }}>✏️</span>
+                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#fbbf24' }}>Informações Adicionais</span>
                       </div>
-                      <div className="px-4 pb-3">
-                        <p className="text-sm text-slate-300 whitespace-pre-wrap">{soapData.informacoesAdicionais}</p>
+                      <div style={{ padding: '0 16px 12px' }}>
+                        <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', margin: 0 }}>{soapData.informacoesAdicionais}</p>
                       </div>
                     </div>
                   )}
@@ -326,48 +541,41 @@ function App() {
 
         {/* Instructions */}
         {!soapData && (
-          <div className="mt-8 bg-slate-800/40 rounded-xl border border-slate-700 p-6">
-            <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <FileText size={18} className="text-emerald-400" />
-              Como usar
+          <div style={{ marginTop: '32px', background: 'rgba(30,41,59,0.4)', borderRadius: '12px', border: '1px solid #334155', padding: '24px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: 600, color: '#fff', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              📖 Como usar
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-700/50">
-                <div className="w-8 h-8 bg-emerald-600/20 rounded-lg flex items-center justify-center mb-3">
-                  <span className="text-emerald-400 font-bold text-sm">1</span>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '16px' }}>
+              <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '8px', padding: '16px', border: '1px solid rgba(51,65,85,0.5)' }}>
+                <div style={{ width: '32px', height: '32px', background: 'rgba(5,150,105,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
+                  <span style={{ color: '#34d399', fontWeight: 'bold', fontSize: '14px' }}>1</span>
                 </div>
-                <h4 className="text-sm font-semibold text-white mb-1">Cole as informações</h4>
-                <p className="text-xs text-slate-400">
-                  Cole no campo esquerdo todas as informações brutas do paciente (anotações, dados de monitorização, exames, etc.)
-                </p>
+                <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '4px', marginTop: 0 }}>Cole as informações</h4>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Cole no campo esquerdo todas as informações brutas do paciente (anotações, monitorização, exames, etc.)</p>
               </div>
-              <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-700/50">
-                <div className="w-8 h-8 bg-amber-600/20 rounded-lg flex items-center justify-center mb-3">
-                  <span className="text-amber-400 font-bold text-sm">2</span>
+              <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '8px', padding: '16px', border: '1px solid rgba(51,65,85,0.5)' }}>
+                <div style={{ width: '32px', height: '32px', background: 'rgba(245,158,11,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
+                  <span style={{ color: '#fbbf24', fontWeight: 'bold', fontSize: '14px' }}>2</span>
                 </div>
-                <h4 className="text-sm font-semibold text-white mb-1">Adicione correções</h4>
-                <p className="text-xs text-slate-400">
-                  Use o campo direito para adicionar informações que devem SUBSTITUIR ou COMPLEMENTAR os dados colados. Use cabeçalhos como "SV:", "Plano:", etc.
-                </p>
+                <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '4px', marginTop: 0 }}>Adicione correções</h4>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Use o campo direito para informações que devem SUBSTITUIR ou COMPLEMENTAR os dados. Use cabeçalhos como "SV:", "Plano:", etc.</p>
               </div>
-              <div className="bg-slate-900/40 rounded-lg p-4 border border-slate-700/50">
-                <div className="w-8 h-8 bg-teal-600/20 rounded-lg flex items-center justify-center mb-3">
-                  <span className="text-teal-400 font-bold text-sm">3</span>
+              <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '8px', padding: '16px', border: '1px solid rgba(51,65,85,0.5)' }}>
+                <div style={{ width: '32px', height: '32px', background: 'rgba(20,184,166,0.2)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
+                  <span style={{ color: '#2dd4bf', fontWeight: 'bold', fontSize: '14px' }}>3</span>
                 </div>
-                <h4 className="text-sm font-semibold text-white mb-1">Organize e copie</h4>
-                <p className="text-xs text-slate-400">
-                  Clique em "Organizar" para gerar a evolução no formato SOAP. Copie o resultado completo ou simplificado para o prontuário.
-                </p>
+                <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '4px', marginTop: 0 }}>Organize e copie</h4>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Clique em "Organizar" para gerar a evolução SOAP. Copie o resultado completo ou simplificado para o prontuário.</p>
               </div>
             </div>
 
-            <div className="mt-4 bg-slate-900/40 rounded-lg p-4 border border-slate-700/50">
-              <h4 className="text-sm font-semibold text-white mb-2">Formato SOAP Modificado para UTI:</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-400">
-                <div><span className="text-purple-400 font-semibold">S</span> - Subjetivo (queixas, história)</div>
-                <div><span className="text-emerald-400 font-semibold">O</span> - Objetivo (sinais vitais, exames, sistemas)</div>
-                <div><span className="text-amber-400 font-semibold">A</span> - Avaliação (hipóteses, estado atual)</div>
-                <div><span className="text-teal-400 font-semibold">P</span> - Plano (condutas, prescrições)</div>
+            <div style={{ marginTop: '16px', background: 'rgba(15,23,42,0.4)', borderRadius: '8px', padding: '16px', border: '1px solid rgba(51,65,85,0.5)' }}>
+              <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '8px', marginTop: 0 }}>Formato SOAP Modificado para UTI:</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', fontSize: '12px', color: '#94a3b8' }}>
+                <div><span style={{ color: '#a855f7', fontWeight: 600 }}>S</span> - Subjetivo (queixas, história)</div>
+                <div><span style={{ color: '#34d399', fontWeight: 600 }}>O</span> - Objetivo (sinais vitais, exames, sistemas)</div>
+                <div><span style={{ color: '#fbbf24', fontWeight: 600 }}>A</span> - Avaliação (hipóteses, estado atual)</div>
+                <div><span style={{ color: '#2dd4bf', fontWeight: 600 }}>P</span> - Plano (condutas, prescrições)</div>
               </div>
             </div>
           </div>
@@ -375,8 +583,8 @@ function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-8 py-4 border-t border-slate-800">
-        <p className="text-center text-xs text-slate-500">
+      <footer style={{ marginTop: '32px', padding: '16px', borderTop: '1px solid #1e293b' }}>
+        <p style={{ textAlign: 'center', fontSize: '12px', color: '#64748b', margin: 0 }}>
           Evolução Médica UTI • Formato SOAP Modificado • Uso profissional
         </p>
       </footer>
@@ -384,45 +592,32 @@ function App() {
   );
 }
 
-// Section Card Component
-interface SectionCardProps {
+// Collapsible Section Component
+interface CollapsibleSectionProps {
   title: string;
-  icon: React.ReactNode;
+  emoji: string;
   content: string;
   expanded: boolean;
   onToggle: () => void;
-  color: string;
+  borderColor: string;
 }
 
-function SectionCard({ title, icon, content, expanded, onToggle, color }: SectionCardProps) {
-  const colorClasses: Record<string, string> = {
-    blue: 'border-blue-700/30',
-    red: 'border-red-700/30',
-    purple: 'border-purple-700/30',
-    amber: 'border-amber-700/30',
-    teal: 'border-teal-700/30',
-    emerald: 'border-emerald-700/30',
-  };
-
+function CollapsibleSection({ title, emoji, content, expanded, onToggle, borderColor }: CollapsibleSectionProps) {
   return (
-    <div className={`bg-slate-900/40 rounded-xl border ${colorClasses[color] || 'border-slate-700'} overflow-hidden`}>
+    <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '12px', border: `1px solid ${borderColor}33`, overflow: 'hidden' }}>
       <button
         onClick={onToggle}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-800/50 transition-colors"
+        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: '#fff' }}
       >
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="text-sm font-semibold text-white">{title}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '16px' }}>{emoji}</span>
+          <span style={{ fontSize: '14px', fontWeight: 600 }}>{title}</span>
         </div>
-        {expanded ? (
-          <ChevronUp size={16} className="text-slate-400" />
-        ) : (
-          <ChevronDown size={16} className="text-slate-400" />
-        )}
+        <span style={{ color: '#94a3b8' }}>{expanded ? '▲' : '▼'}</span>
       </button>
       {expanded && (
-        <div className="px-4 pb-3">
-          <p className="text-sm text-slate-300 whitespace-pre-wrap">{content}</p>
+        <div style={{ padding: '0 16px 12px' }}>
+          <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', margin: 0 }}>{content}</p>
         </div>
       )}
     </div>
