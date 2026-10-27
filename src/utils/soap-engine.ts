@@ -223,7 +223,8 @@ function classifyLine(line: string): string | null {
   if (!lower) return null;
 
   // === IDENTIFICAÇÃO ===
-  if (/^(paciente:|nome:|leito:|quarto:|conv[eê]nio:|prontu[áa]rio:|data:|hora:|dia de uti|d[úu]t[íi]:|admitido em|internado em)/.test(lower)) return 'identificacao';
+  // Aceitar tanto com dois pontos quanto com espaço
+  if (/^(paciente[:\s]|nome[:\s]|leito[:\s]|quarto[:\s]|conv[eê]nio[:\s]|prontu[áa]rio[:\s]|data[:\s]|hora[:\s]|dia de uti|d[úu]t[íi][:|]|admitido em|internado em)/.test(lower)) return 'identificacao';
 
   // === SUBJETIVO ===
   if (/^(subjetivo|queixa principal|qp:|hda:|hist[óo]ria da doen[çc]a|hist[óo]ria cl[íi]nica|antecedentes|hist[óo]ria pregressa|relata que|refere que|queixa de|acompanhante relata|fam[íi]lia relata|trazido por|paciente relata|paciente refere|in[íi]cio dos sintomas|h[áa] dias|h[áa] horas|onset|motivo da interna[çc][ãa]o|motivo interna[çc][ãa]o)/.test(lower)) return 'subjetivo';
@@ -265,7 +266,8 @@ function classifyLine(line: string): string | null {
   if (/^(medica[çc][ãa]o|antibi[óo]tico|meropenem|piperacilina|vancomicina|noradrenalina|adrenalina|vasopressina|dobutamina|dopamina|metadona|morfina|fentanil|propofol|midazolam|dexmedetomidina|cetamina|heparina|enoxaparina|omeprazol|pantoprazol|insulina|profilaxia|prescri[çc][ãa]o|droga|drogas|medica[çc][õo]es)/.test(lower)) return 'medicamentos';
 
   // === DIAGNÓSTICO ===
-  if (/^(dx:|dx |diagn[óo]stico|hip[óo]tese diagn|hip[óo]tese de|hip[óo]teses diagn|problemas ativos|diagn[óo]sticos|cid)/.test(lower)) return 'diagnostico';
+  // Aceitar DX, Dx, dx, Diagnóstico, diagnóstico, etc.
+  if (/^(dx[:\s]|diagn[óo]stico[:\s]|hip[óo]tese diagn[:\s]|hip[óo]tese de[:\s]|hip[óo]teses diagn[:\s]|problemas ativos[:\s]|diagn[óo]sticos[:\s]|cid[:\s])/i.test(line)) return 'diagnostico';
 
   // === AVALIAÇÃO ===
   if (/^(avalia[çc][ãa]o|quadro cl[íi]nico|evolu[çc][ãa]o cl[íi]nica|melhora|piora|est[áa]vel|grave|cr[íi]tico|resposta terap|paciente apresenta|encontra-se|mant[ée]m-se|apresenta melhora|apresenta piora|quadro de|paciente em|conclus[ãa]o|s[íi]ntese|an[áa]lise cl[íi]nica)/.test(lower)) return 'avaliacao';
@@ -290,21 +292,21 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
 
     switch (cls) {
       case 'identificacao':
-        // Aceitar variações comuns de identificação
+        // Aceitar variações comuns de identificação (com ou sem dois pontos)
         if (/^(nome|paciente|nome do paciente|nome completo)/i.test(line)) {
-          result.identificacao.nome = line.replace(/^(nome|paciente|nome do paciente|nome completo)\s*[:\-]?\s*/i, '');
+          result.identificacao.nome = line.replace(/^(nome|paciente|nome do paciente|nome completo)\s*[:\-]?\s*/i, '').trim();
         }
         else if (/^(leito|quarto|aposento)/i.test(line)) {
-          result.identificacao.leito = line.replace(/^(leito|quarto|aposento)\s*[:\-]?\s*/i, '');
+          result.identificacao.leito = line.replace(/^(leito|quarto|aposento)\s*[:\-]?\s*/i, '').trim();
         }
         else if (/^(conv[eê]nio|plano de sa[úu]de|operadora)/i.test(line)) {
-          result.identificacao.convenio = line.replace(/^(conv[eê]nio|plano de sa[úu]de|operadora)\s*[:\-]?\s*/i, '');
+          result.identificacao.convenio = line.replace(/^(conv[eê]nio|plano de sa[úu]de|operadora)\s*[:\-]?\s*/i, '').trim();
         }
         else if (/^(dia de uti|d[úu]t[íi]|dia UTI)/i.test(line)) {
-          result.identificacao.diaUTI = line.replace(/^(dia de uti|d[úu]t[íi]|dia UTI)\s*[:\-]?\s*/i, '');
+          result.identificacao.diaUTI = line.replace(/^(dia de uti|d[úu]t[íi]|dia UTI)\s*[:\-]?\s*/i, '').trim();
         }
         else if (/^(data|hora|data e hora|data\/hora)/i.test(line)) {
-          result.identificacao.dataHora = line.replace(/^(data|hora|data e hora|data\/hora)\s*[:\-]?\s*/i, '');
+          result.identificacao.dataHora = line.replace(/^(data|hora|data e hora|data\/hora)\s*[:\-]?\s*/i, '').trim();
         }
         break;
       case 'subjetivo':
@@ -347,10 +349,23 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
         result.dispositivos.push(line);
         break;
       case 'examesLab':
+        // REGRA: Associar resultado com data
+        // Se a linha tem data, usar essa data
+        // Se não tem data, verificar se há data no contexto (linha anterior)
+        let labDate = timestamp;
+        if (!labDate && i > 0) {
+          // Verificar se a linha anterior tem data
+          const prevLine = lines[i-1].trim();
+          const prevDate = extractTimestamp(prevLine);
+          if (prevDate && /exames? laboratoriais|laborat[óo]rio/i.test(prevLine)) {
+            labDate = prevDate;
+          }
+        }
+        
         result.examesLab.push({
           nome: line,
           valor: line,
-          data: timestamp,
+          data: labDate,
           source,
         });
         break;
