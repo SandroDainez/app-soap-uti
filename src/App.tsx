@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 interface SoapData {
   identificacao: string;
@@ -23,24 +23,108 @@ interface SoapData {
   informacoesAdicionais: string;
 }
 
+// ====== TOAST NOTIFICATION ======
+interface ToastMessage {
+  id: number;
+  text: string;
+  type: 'success' | 'error' | 'info';
+}
+
+let toastIdCounter = 0;
+
+function ToastContainer({ toasts, onRemove }: { toasts: ToastMessage[]; onRemove: (id: number) => void }) {
+  return (
+    <div style={{
+      position: 'fixed',
+      top: '16px',
+      right: '16px',
+      zIndex: 9999,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '8px',
+      pointerEvents: 'none',
+    }}>
+      {toasts.map((toast) => (
+        <ToastItem key={toast.id} toast={toast} onRemove={onRemove} />
+      ))}
+    </div>
+  );
+}
+
+function ToastItem({ toast, onRemove }: { toast: ToastMessage; onRemove: (id: number) => void }) {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    requestAnimationFrame(() => setVisible(true));
+    const timer = setTimeout(() => {
+      setVisible(false);
+      setTimeout(() => onRemove(toast.id), 300);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [toast.id, onRemove]);
+
+  const bgColor = toast.type === 'success' ? '#059669' : toast.type === 'error' ? '#dc2626' : '#2563eb';
+  const icon = toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : 'ℹ️';
+
+  return (
+    <div style={{
+      background: bgColor,
+      color: '#fff',
+      padding: '12px 20px',
+      borderRadius: '10px',
+      fontSize: '14px',
+      fontWeight: 500,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+      transform: visible ? 'translateX(0)' : 'translateX(120%)',
+      opacity: visible ? 1 : 0,
+      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+      pointerEvents: 'auto',
+      minWidth: '250px',
+    }}>
+      <span style={{ fontSize: '18px' }}>{icon}</span>
+      {toast.text}
+    </div>
+  );
+}
+
+// ====== COPY UTILITY ======
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    // Fallback for older browsers or non-secure contexts
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '-9999px';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const success = document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return success;
+  } catch {
+    return false;
+  }
+}
+
+// ====== PARSER FUNCTIONS ======
 function createEmptySoap(): SoapData {
   return {
     identificacao: '',
     diagnosticoAdmissao: '',
     subjetivo: '',
     objetivo: {
-      sinaisVitais: '',
-      hemodinamica: '',
-      respiratorio: '',
-      neurologico: '',
-      renal: '',
-      gastrointestinal: '',
-      hematologico: '',
-      infectologico: '',
-      metabolico: '',
-      examesLaboratoriais: '',
-      dispositivos: '',
-      escores: '',
+      sinaisVitais: '', hemodinamica: '', respiratorio: '', neurologico: '',
+      renal: '', gastrointestinal: '', hematologico: '', infectologico: '',
+      metabolico: '', examesLaboratoriais: '', dispositivos: '', escores: '',
     },
     avaliacao: '',
     plano: '',
@@ -141,7 +225,6 @@ function parseRawText(rawText: string, additionalInfo: string): SoapData {
 
   if (additionalInfo.trim()) {
     soap.informacoesAdicionais = additionalInfo.trim();
-
     const additionalLower = additionalInfo.toLowerCase();
     if (additionalLower.includes('sv:') || additionalLower.includes('sinais vitais')) {
       const svSection = extractByHeader(additionalInfo, 'sv:') || extractByHeader(additionalInfo, 'sinais vitais');
@@ -165,12 +248,8 @@ function formatSoapForDisplay(soap: SoapData): string {
   output += '═══════════════════════════════════════\n';
   output += '         EVOLUÇÃO MÉDICA - UTI\n';
   output += '═══════════════════════════════════════\n\n';
-  if (soap.identificacao) {
-    output += '▸ IDENTIFICAÇÃO:\n' + soap.identificacao + '\n\n';
-  }
-  if (soap.diagnosticoAdmissao) {
-    output += '▸ DIAGNÓSTICO DE ADMISSÃO:\n' + soap.diagnosticoAdmissao + '\n\n';
-  }
+  if (soap.identificacao) output += '▸ IDENTIFICAÇÃO:\n' + soap.identificacao + '\n\n';
+  if (soap.diagnosticoAdmissao) output += '▸ DIAGNÓSTICO DE ADMISSÃO:\n' + soap.diagnosticoAdmissao + '\n\n';
   output += '───────────────────────────────────────\n';
   output += 'S - SUBJETIVO\n';
   output += '───────────────────────────────────────\n';
@@ -232,48 +311,89 @@ function formatSoapSimple(soap: SoapData): string {
   return output;
 }
 
+// ====== MAIN APP ======
 function App() {
   const [rawText, setRawText] = useState('');
   const [additionalInfo, setAdditionalInfo] = useState('');
   const [soapData, setSoapData] = useState<SoapData | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [copiedSimple, setCopiedSimple] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    identificacao: true,
-    subjetivo: true,
-    objetivo: true,
-    avaliacao: true,
-    plano: true,
+    identificacao: true, subjetivo: true, objetivo: true, avaliacao: true, plano: true,
   });
   const [viewMode, setViewMode] = useState<'structured' | 'text'>('structured');
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [copiedPreview, setCopiedPreview] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const addToast = useCallback((text: string, type: 'success' | 'error' | 'info' = 'success') => {
+    const id = ++toastIdCounter;
+    setToasts(prev => [...prev, { id, text, type }]);
+  }, []);
+
+  const removeToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
 
   const handleProcess = useCallback(() => {
     if (!rawText.trim()) return;
     const parsed = parseRawText(rawText, additionalInfo);
     setSoapData(parsed);
-  }, [rawText, additionalInfo]);
+    addToast('Evolução organizada com sucesso!', 'success');
+  }, [rawText, additionalInfo, addToast]);
 
-  const handleCopyFull = useCallback(() => {
+  const handleCopyFull = useCallback(async () => {
     if (!soapData) return;
     const text = formatSoapForDisplay(soapData);
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [soapData]);
+    const success = await copyToClipboard(text);
+    if (success) {
+      addToast('📋 Evolução completa copiada!', 'success');
+    } else {
+      addToast('Erro ao copiar. Tente novamente.', 'error');
+    }
+  }, [soapData, addToast]);
 
-  const handleCopySimple = useCallback(() => {
+  const handleCopySimple = useCallback(async () => {
     if (!soapData) return;
     const text = formatSoapSimple(soapData);
-    navigator.clipboard.writeText(text);
-    setCopiedSimple(true);
-    setTimeout(() => setCopiedSimple(false), 2000);
+    const success = await copyToClipboard(text);
+    if (success) {
+      addToast('📄 Evolução simplificada copiada!', 'success');
+    } else {
+      addToast('Erro ao copiar. Tente novamente.', 'error');
+    }
+  }, [soapData, addToast]);
+
+  const handleCopySection = useCallback(async (label: string, content: string) => {
+    const text = `${label}:\n${content}`;
+    const success = await copyToClipboard(text);
+    if (success) {
+      addToast(`📋 "${label}" copiado!`, 'success');
+    } else {
+      addToast('Erro ao copiar.', 'error');
+    }
+  }, [addToast]);
+
+  const handleShowCopyModal = useCallback(() => {
+    if (!soapData) return;
+    setCopiedPreview(formatSoapSimple(soapData));
+    setShowCopyModal(true);
   }, [soapData]);
+
+  const handleCopyFromModal = useCallback(async () => {
+    const success = await copyToClipboard(copiedPreview);
+    if (success) {
+      addToast('✅ Texto copiado com sucesso!', 'success');
+    } else {
+      addToast('Erro ao copiar.', 'error');
+    }
+  }, [copiedPreview, addToast]);
 
   const handleClear = useCallback(() => {
     setRawText('');
     setAdditionalInfo('');
     setSoapData(null);
-  }, []);
+    addToast('Dados limpos', 'info');
+  }, [addToast]);
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -301,6 +421,101 @@ function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)', color: '#e2e8f0' }}>
+      {/* Toast Notifications */}
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      {/* Copy Modal */}
+      {showCopyModal && soapData && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+          zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '16px',
+        }} onClick={() => setShowCopyModal(false)}>
+          <div style={{
+            background: '#1e293b', borderRadius: '16px', border: '1px solid #334155',
+            maxWidth: '700px', width: '100%', maxHeight: '85vh', overflow: 'hidden',
+            display: 'flex', flexDirection: 'column',
+            boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
+          }} onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div style={{
+              padding: '16px 20px', background: '#0f172a', borderBottom: '1px solid #334155',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '22px' }}>📋</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#fff' }}>Copiar Evolução</h3>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>Selecione o formato e copie</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCopyModal(false)}
+                style={{ background: '#334155', border: 'none', color: '#94a3b8', width: '32px', height: '32px', borderRadius: '8px', cursor: 'pointer', fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              >✕</button>
+            </div>
+
+            {/* Format Buttons */}
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #334155', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => setCopiedPreview(formatSoapSimple(soapData))}
+                style={{
+                  padding: '8px 16px', fontSize: '13px', fontWeight: 500, borderRadius: '8px', border: 'none', cursor: 'pointer',
+                  background: copiedPreview === formatSoapSimple(soapData) ? '#059669' : '#334155',
+                  color: copiedPreview === formatSoapSimple(soapData) ? '#fff' : '#94a3b8',
+                }}
+              >📄 Formato Simples</button>
+              <button
+                onClick={() => setCopiedPreview(formatSoapForDisplay(soapData))}
+                style={{
+                  padding: '8px 16px', fontSize: '13px', fontWeight: 500, borderRadius: '8px', border: 'none', cursor: 'pointer',
+                  background: copiedPreview === formatSoapForDisplay(soapData) ? '#059669' : '#334155',
+                  color: copiedPreview === formatSoapForDisplay(soapData) ? '#fff' : '#94a3b8',
+                }}
+              >📋 Formato Completo</button>
+            </div>
+
+            {/* Preview */}
+            <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+              <textarea
+                ref={textareaRef}
+                value={copiedPreview}
+                onChange={(e) => setCopiedPreview(e.target.value)}
+                style={{
+                  width: '100%', minHeight: '300px', padding: '16px',
+                  background: '#0f172a', color: '#e2e8f0', fontSize: '13px',
+                  fontFamily: 'monospace', border: '1px solid #334155',
+                  borderRadius: '8px', resize: 'vertical', outline: 'none',
+                  boxSizing: 'border-box', lineHeight: 1.5,
+                }}
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div style={{
+              padding: '16px 20px', borderTop: '1px solid #334155',
+              display: 'flex', justifyContent: 'flex-end', gap: '10px',
+            }}>
+              <button
+                onClick={() => setShowCopyModal(false)}
+                style={{ padding: '10px 20px', fontSize: '14px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 500 }}
+              >Fechar</button>
+              <button
+                onClick={handleCopyFromModal}
+                style={{
+                  padding: '10px 24px', fontSize: '14px',
+                  background: 'linear-gradient(135deg, #059669, #0d9488)',
+                  color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer',
+                  fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px',
+                  boxShadow: '0 4px 12px rgba(5,150,105,0.3)',
+                }}
+              >📋 Copiar Texto</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header style={{ background: 'rgba(30,41,59,0.9)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #334155', position: 'sticky', top: 0, zIndex: 50 }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -313,12 +528,28 @@ function App() {
               <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Formato SOAP Modificado</p>
             </div>
           </div>
-          <button
-            onClick={handleClear}
-            style={{ padding: '8px 12px', fontSize: '14px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            🗑️ Limpar
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            {soapData && (
+              <button
+                onClick={handleShowCopyModal}
+                style={{
+                  padding: '8px 16px', fontSize: '14px', fontWeight: 600,
+                  background: 'linear-gradient(135deg, #059669, #0d9488)',
+                  color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  boxShadow: '0 2px 8px rgba(5,150,105,0.3)',
+                }}
+              >
+                📋 Copiar Evolução
+              </button>
+            )}
+            <button
+              onClick={handleClear}
+              style={{ padding: '8px 12px', fontSize: '14px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              🗑️ Limpar
+            </button>
+          </div>
         </div>
       </header>
 
@@ -364,15 +595,9 @@ function App() {
             style={{
               padding: '12px 32px',
               background: rawText.trim() ? 'linear-gradient(135deg, #059669, #0d9488)' : '#475569',
-              color: '#fff',
-              fontWeight: 600,
-              fontSize: '16px',
-              border: 'none',
-              borderRadius: '12px',
+              color: '#fff', fontWeight: 600, fontSize: '16px', border: 'none', borderRadius: '12px',
               cursor: rawText.trim() ? 'pointer' : 'not-allowed',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
+              display: 'flex', alignItems: 'center', gap: '10px',
               boxShadow: rawText.trim() ? '0 4px 14px rgba(5,150,105,0.3)' : 'none',
             }}
           >
@@ -398,9 +623,7 @@ function App() {
                       background: viewMode === 'structured' ? '#059669' : 'transparent',
                       color: viewMode === 'structured' ? '#fff' : '#94a3b8',
                     }}
-                  >
-                    Estruturado
-                  </button>
+                  >Estruturado</button>
                   <button
                     onClick={() => setViewMode('text')}
                     style={{
@@ -408,65 +631,63 @@ function App() {
                       background: viewMode === 'text' ? '#059669' : 'transparent',
                       color: viewMode === 'text' ? '#fff' : '#94a3b8',
                     }}
-                  >
-                    Texto
-                  </button>
+                  >Texto</button>
                 </div>
                 <button
                   onClick={handleCopySimple}
-                  style={{ padding: '6px 12px', fontSize: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
-                >
-                  {copiedSimple ? '✅ Copiado!' : '📄 Copiar Simples'}
-                </button>
+                  style={{ padding: '6px 12px', fontSize: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 500 }}
+                >📄 Copiar Simples</button>
                 <button
                   onClick={handleCopyFull}
-                  style={{ padding: '6px 12px', fontSize: '12px', background: '#059669', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}
-                >
-                  {copied ? '✅ Copiado!' : '📋 Copiar Completo'}
-                </button>
+                  style={{ padding: '6px 12px', fontSize: '12px', background: '#059669', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 500 }}
+                >📋 Copiar Completo</button>
               </div>
             </div>
 
             {/* Results Content */}
             <div style={{ padding: '16px' }}>
               {viewMode === 'text' ? (
-                <pre style={{ fontSize: '13px', color: '#e2e8f0', fontFamily: 'monospace', whiteSpace: 'pre-wrap', background: 'rgba(15,23,42,0.5)', borderRadius: '8px', padding: '16px', overflowX: 'auto', margin: 0 }}>
-                  {formatSoapForDisplay(soapData)}
-                </pre>
+                <div style={{ position: 'relative' }}>
+                  <pre style={{ fontSize: '13px', color: '#e2e8f0', fontFamily: 'monospace', whiteSpace: 'pre-wrap', background: 'rgba(15,23,42,0.5)', borderRadius: '8px', padding: '16px', overflowX: 'auto', margin: 0 }}>
+                    {formatSoapForDisplay(soapData)}
+                  </pre>
+                  <button
+                    onClick={handleCopyFull}
+                    style={{
+                      position: 'absolute', top: '8px', right: '8px',
+                      padding: '8px 14px', fontSize: '12px', fontWeight: 600,
+                      background: 'linear-gradient(135deg, #059669, #0d9488)',
+                      color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: '6px',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                    }}
+                  >📋 Copiar Tudo</button>
+                </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {/* Identificação */}
                   {hasContent(soapData.identificacao) && (
                     <CollapsibleSection
-                      title="Identificação"
-                      emoji="📝"
-                      content={soapData.identificacao}
-                      expanded={expandedSections.identificacao}
-                      onToggle={() => toggleSection('identificacao')}
-                      borderColor="#3b82f6"
+                      title="Identificação" emoji="📝" content={soapData.identificacao}
+                      expanded={expandedSections.identificacao} onToggle={() => toggleSection('identificacao')}
+                      borderColor="#3b82f6" onCopy={() => handleCopySection('Identificação', soapData.identificacao)}
                     />
                   )}
 
                   {/* Diagnóstico */}
                   {hasContent(soapData.diagnosticoAdmissao) && (
                     <CollapsibleSection
-                      title="Diagnóstico de Admissão"
-                      emoji="🔴"
-                      content={soapData.diagnosticoAdmissao}
-                      expanded={expandedSections.identificacao}
-                      onToggle={() => toggleSection('identificacao')}
-                      borderColor="#ef4444"
+                      title="Diagnóstico de Admissão" emoji="🔴" content={soapData.diagnosticoAdmissao}
+                      expanded={expandedSections.identificacao} onToggle={() => toggleSection('identificacao')}
+                      borderColor="#ef4444" onCopy={() => handleCopySection('Diagnóstico de Admissão', soapData.diagnosticoAdmissao)}
                     />
                   )}
 
                   {/* Subjetivo */}
                   <CollapsibleSection
-                    title="S - Subjetivo"
-                    emoji="💬"
-                    content={soapData.subjetivo || 'Não informado'}
-                    expanded={expandedSections.subjetivo}
-                    onToggle={() => toggleSection('subjetivo')}
-                    borderColor="#a855f7"
+                    title="S - Subjetivo" emoji="💬" content={soapData.subjetivo || 'Não informado'}
+                    expanded={expandedSections.subjetivo} onToggle={() => toggleSection('subjetivo')}
+                    borderColor="#a855f7" onCopy={() => handleCopySection('S - Subjetivo', soapData.subjetivo || 'Não informado')}
                   />
 
                   {/* Objetivo */}
@@ -487,9 +708,20 @@ function App() {
                         {getObjectiveSections().length > 0 ? (
                           getObjectiveSections().map((section) => (
                             <div key={section.key} style={{ background: 'rgba(30,41,59,0.6)', borderRadius: '8px', padding: '12px', border: '1px solid rgba(51,65,85,0.5)' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                                <span>{section.emoji}</span>
-                                <span style={{ fontSize: '12px', fontWeight: 600, color: '#34d399' }}>{section.label}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span>{section.emoji}</span>
+                                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#34d399' }}>{section.label}</span>
+                                </div>
+                                <button
+                                  onClick={() => handleCopySection(section.label, section.content)}
+                                  style={{
+                                    padding: '3px 10px', fontSize: '11px', background: '#334155', color: '#94a3b8',
+                                    border: 'none', borderRadius: '6px', cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', gap: '4px',
+                                  }}
+                                  title={`Copiar ${section.label}`}
+                                >📋 Copiar</button>
                               </div>
                               <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', fontFamily: 'monospace', margin: 0 }}>{section.content}</p>
                             </div>
@@ -503,30 +735,34 @@ function App() {
 
                   {/* Avaliação */}
                   <CollapsibleSection
-                    title="A - Avaliação"
-                    emoji="🧠"
-                    content={soapData.avaliacao || 'Não informado'}
-                    expanded={expandedSections.avaliacao}
-                    onToggle={() => toggleSection('avaliacao')}
-                    borderColor="#f59e0b"
+                    title="A - Avaliação" emoji="🧠" content={soapData.avaliacao || 'Não informado'}
+                    expanded={expandedSections.avaliacao} onToggle={() => toggleSection('avaliacao')}
+                    borderColor="#f59e0b" onCopy={() => handleCopySection('A - Avaliação', soapData.avaliacao || 'Não informado')}
                   />
 
                   {/* Plano */}
                   <CollapsibleSection
-                    title="P - Plano"
-                    emoji="📋"
-                    content={soapData.plano || 'Não informado'}
-                    expanded={expandedSections.plano}
-                    onToggle={() => toggleSection('plano')}
-                    borderColor="#14b8a6"
+                    title="P - Plano" emoji="📋" content={soapData.plano || 'Não informado'}
+                    expanded={expandedSections.plano} onToggle={() => toggleSection('plano')}
+                    borderColor="#14b8a6" onCopy={() => handleCopySection('P - Plano', soapData.plano || 'Não informado')}
                   />
 
                   {/* Informações Adicionais */}
                   {hasContent(soapData.informacoesAdicionais) && (
                     <div style={{ background: 'rgba(120,53,15,0.2)', borderRadius: '12px', border: '1px solid rgba(180,83,9,0.3)', overflow: 'hidden' }}>
-                      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: '16px' }}>✏️</span>
-                        <span style={{ fontSize: '14px', fontWeight: 600, color: '#fbbf24' }}>Informações Adicionais</span>
+                      <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '16px' }}>✏️</span>
+                          <span style={{ fontSize: '14px', fontWeight: 600, color: '#fbbf24' }}>Informações Adicionais</span>
+                        </div>
+                        <button
+                          onClick={() => handleCopySection('Informações Adicionais', soapData.informacoesAdicionais)}
+                          style={{
+                            padding: '4px 10px', fontSize: '11px', background: '#334155', color: '#94a3b8',
+                            border: 'none', borderRadius: '6px', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', gap: '4px',
+                          }}
+                        >📋 Copiar</button>
                       </div>
                       <div style={{ padding: '0 16px 12px' }}>
                         <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', margin: 0 }}>{soapData.informacoesAdicionais}</p>
@@ -535,6 +771,26 @@ function App() {
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Big Copy Button at Bottom */}
+            <div style={{
+              padding: '16px', borderTop: '1px solid #334155',
+              display: 'flex', justifyContent: 'center', gap: '12px', flexWrap: 'wrap',
+            }}>
+              <button
+                onClick={handleShowCopyModal}
+                style={{
+                  padding: '14px 32px', fontSize: '16px', fontWeight: 700,
+                  background: 'linear-gradient(135deg, #059669, #0d9488)',
+                  color: '#fff', border: 'none', borderRadius: '12px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  boxShadow: '0 4px 20px rgba(5,150,105,0.4)',
+                  width: '100%', maxWidth: '400px', justifyContent: 'center',
+                }}
+              >
+                📋 Copiar Evolução Completa
+              </button>
             </div>
           </div>
         )}
@@ -565,7 +821,7 @@ function App() {
                   <span style={{ color: '#2dd4bf', fontWeight: 'bold', fontSize: '14px' }}>3</span>
                 </div>
                 <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#fff', marginBottom: '4px', marginTop: 0 }}>Organize e copie</h4>
-                <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Clique em "Organizar" para gerar a evolução SOAP. Copie o resultado completo ou simplificado para o prontuário.</p>
+                <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>Clique em "Organizar" para gerar a evolução SOAP. Use o botão "📋 Copiar Evolução" para copiar o resultado.</p>
               </div>
             </div>
 
@@ -592,7 +848,7 @@ function App() {
   );
 }
 
-// Collapsible Section Component
+// ====== COLLAPSIBLE SECTION WITH COPY ======
 interface CollapsibleSectionProps {
   title: string;
   emoji: string;
@@ -600,21 +856,35 @@ interface CollapsibleSectionProps {
   expanded: boolean;
   onToggle: () => void;
   borderColor: string;
+  onCopy?: () => void;
 }
 
-function CollapsibleSection({ title, emoji, content, expanded, onToggle, borderColor }: CollapsibleSectionProps) {
+function CollapsibleSection({ title, emoji, content, expanded, onToggle, borderColor, onCopy }: CollapsibleSectionProps) {
   return (
     <div style={{ background: 'rgba(15,23,42,0.4)', borderRadius: '12px', border: `1px solid ${borderColor}33`, overflow: 'hidden' }}>
-      <button
-        onClick={onToggle}
-        style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: '#fff' }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '16px' }}>{emoji}</span>
-          <span style={{ fontSize: '14px', fontWeight: 600 }}>{title}</span>
-        </div>
-        <span style={{ color: '#94a3b8' }}>{expanded ? '▲' : '▼'}</span>
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button
+          onClick={onToggle}
+          style={{ flex: 1, padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: '#fff' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '16px' }}>{emoji}</span>
+            <span style={{ fontSize: '14px', fontWeight: 600 }}>{title}</span>
+          </div>
+          <span style={{ color: '#94a3b8' }}>{expanded ? '▲' : '▼'}</span>
+        </button>
+        {onCopy && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onCopy(); }}
+            style={{
+              padding: '4px 10px', fontSize: '11px', background: '#334155', color: '#94a3b8',
+              border: 'none', borderRadius: '6px', cursor: 'pointer', marginRight: '12px',
+              display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
+            }}
+            title={`Copiar ${title}`}
+          >📋 Copiar</button>
+        )}
+      </div>
       {expanded && (
         <div style={{ padding: '0 16px 12px' }}>
           <p style={{ fontSize: '13px', color: '#cbd5e1', whiteSpace: 'pre-wrap', margin: 0 }}>{content}</p>
