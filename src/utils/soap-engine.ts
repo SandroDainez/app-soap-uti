@@ -355,10 +355,16 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
         });
         break;
       case 'microbiologia':
+        // Detecta culturas positivas por palavras-chave ou microrganismos conhecidos
+        const hasPositiveKeyword = /positiv[oa]|crescimento|isolad[oa]/i.test(line);
+        const hasKnownMicroorganism = /kpc|mrsa|esbl|e\. coli|pseudomonas|acinetobacter|candida|enterobact|staphylococcus|streptococcus|klebsiella|proteus|serratia|enterococcus/i.test(line);
+        const hasNegativeKeyword = /negativ[oa]|sem crescimento/i.test(line);
+        const hasColonization = /coloniza/i.test(line);
+        
         result.microbiologia.push({
           material: line,
           dataColeta: timestamp,
-          situacao: /positivo|crescimento|isolado/i.test(line) ? 'positiva' : /negativo|sem crescimento/i.test(line) ? 'negativa' : /coloniza/i.test(line) ? 'colonizacao' : 'pendente',
+          situacao: (hasPositiveKeyword || hasKnownMicroorganism) ? 'positiva' : hasNegativeKeyword ? 'negativa' : hasColonization ? 'colonizacao' : 'pendente',
           source,
         });
         break;
@@ -438,33 +444,52 @@ function reconcileSinaisVitais(base: string[], atual: string[]): { merged: strin
   const conflitos: Conflito[] = [];
   const merged: string[] = [...base];
 
+  // Extrai parâmetros individuais de linhas compostas
+  const extractVitalParams = (line: string): string[] => {
+    const params: string[] = [];
+    // Extrai PA, FC, FR, Temp, SpO2, PAM individualmente
+    const paMatch = line.match(/(?:PA|TA|Pressão Arterial)[:\s]+[\d\/]+(?:\s*mmHg)?/i);
+    const fcMatch = line.match(/FC[:\s]+[\d\-]+(?:\s*bpm)?/i);
+    const frMatch = line.match(/FR[:\s]+[\d\-]+(?:\s*irpm)?/i);
+    const tempMatch = line.match(/Temp(?:eratura)?[:\s]+[\d\.]+(?:\s*°C)?/i);
+    const spo2Match = line.match(/SpO2[:\s]+[\d]+(?:\s*%)?/i);
+    const pamMatch = line.match(/PAM[:\s]+[\d]+(?:\s*mmHg)?/i);
+    
+    if (paMatch) params.push(paMatch[0]);
+    if (fcMatch) params.push(fcMatch[0]);
+    if (frMatch) params.push(frMatch[0]);
+    if (tempMatch) params.push(tempMatch[0]);
+    if (spo2Match) params.push(spo2Match[0]);
+    if (pamMatch) params.push(pamMatch[0]);
+    
+    return params;
+  };
+
   // Para cada sinal vital atual, verifica se há conflito com o anterior
   for (const atualLine of atual) {
-    const lower = atualLine.toLowerCase();
-    let conflictFound = false;
-
+    const atualParams = extractVitalParams(atualLine);
+    
     for (let i = 0; i < merged.length; i++) {
-      const existingLower = merged[i].toLowerCase();
-      // Verifica se ambos se referem ao mesmo parâmetro
-      if (isSameVitalSign(existingLower, lower)) {
-        // Se os valores são diferentes, é um conflito
-        if (existingLower !== lower) {
-          conflitos.push({
-            campo: 'Sinais Vitais',
-            valorAnterior: merged[i],
-            valorAtual: atualLine,
-            resolvido: false,
-          });
-          // Substitui pelo valor atual (prioriza informação atual)
-          merged[i] = atualLine;
-          conflictFound = true;
-          break;
+      const existingParams = extractVitalParams(merged[i]);
+      
+      // Verifica se há sobreposição de parâmetros
+      for (const atualParam of atualParams) {
+        for (const existingParam of existingParams) {
+          if (isSameVitalSign(existingParam.toLowerCase(), atualParam.toLowerCase())) {
+            // Se os valores são diferentes, é um conflito
+            if (existingParam.toLowerCase() !== atualParam.toLowerCase()) {
+              conflitos.push({
+                campo: 'Sinais Vitais',
+                valorAnterior: existingParam,
+                valorAtual: atualParam,
+                resolvido: false,
+              });
+              // Substitui o parâmetro antigo pelo novo na linha original
+              merged[i] = merged[i].replace(new RegExp(existingParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), atualParam);
+            }
+          }
         }
       }
-    }
-
-    if (!conflictFound) {
-      merged.push(atualLine);
     }
   }
 
@@ -539,6 +564,34 @@ function reconcileCultures(base: Cultura[], atual: Cultura[]): Cultura[] {
   return Array.from(byMaterial.values());
 }
 
+function reconcileDiet(base: string[], atual: string[]): string[] {
+  // Prioriza o valor atual quando há conflito de dieta
+  const merged: string[] = [...base];
+  
+  for (const atualLine of atual) {
+    // Verifica se é uma linha de dieta
+    if (/dieta.*ml\/h/i.test(atualLine)) {
+      let conflictFound = false;
+      
+      for (let i = 0; i < merged.length; i++) {
+        // Verifica se ambos se referem a dieta
+        if (/dieta.*ml\/h/i.test(merged[i])) {
+          // Substitui pelo valor atual (prioriza informação atual)
+          merged[i] = atualLine;
+          conflictFound = true;
+          break;
+        }
+      }
+      
+      if (!conflictFound) {
+        merged.push(atualLine);
+      }
+    }
+  }
+  
+  return merged;
+}
+
 // ======================== ETAPA 5: OBJETO CLÍNICO ESTRUTURADO ========================
 
 function buildClinicalData(base: ExtractionResult, atual: ExtractionResult): { data: ClinicalData; conflitos: Conflito[] } {
@@ -605,10 +658,10 @@ function buildClinicalData(base: ExtractionResult, atual: ExtractionResult): { d
       base.renal.map(v => ({ value: v, source: 'texto-base' as const })),
       atual.renal.map(v => ({ value: v, source: 'exame-atual' as const }))
     ),
-    gastrointestinal: mergeDataPoints(
-      base.gastrointestinal.map(v => ({ value: v, source: 'texto-base' as const })),
-      atual.gastrointestinal.map(v => ({ value: v, source: 'exame-atual' as const }))
-    ),
+    gastrointestinal: reconcileDiet(
+      base.gastrointestinal,
+      atual.gastrointestinal
+    ).map(v => ({ value: v, source: 'exame-atual' as const })),
     extremidades: mergeDataPoints(
       base.extremidades.map(v => ({ value: v, source: 'texto-base' as const })),
       atual.extremidades.map(v => ({ value: v, source: 'exame-atual' as const }))
@@ -870,8 +923,28 @@ function deduplicateFinalData(data: ClinicalData): ClinicalData {
     return true;
   });
   
+  // Deduplicar neurológico com similaridade semântica
+  const neuroSeen: string[] = [];
+  newData.objetivo.neurologico = data.objetivo.neurologico.filter((d: DataPoint) => {
+    const value = d.value.toLowerCase().trim();
+    // Extrair componentes principais (Glasgow, RASS, pupilas)
+    const glasgow = value.match(/glasgow\s+\d+/i)?.[0] || '';
+    const rass = value.match(/rass\s+[\+\-]?\d+/i)?.[0] || '';
+    const pupilas = value.match(/pupila[s]?\s+isoc[óo]ricas|pupila[s]?\s+anisoc[óo]ricas/i)?.[0] || '';
+    const key = `${glasgow}|${rass}|${pupilas}`;
+    
+    // Verifica se já existe um registro similar
+    for (const seen of neuroSeen) {
+      if (seen === key || seen.includes(glasgow) && seen.includes(rass)) {
+        return false; // Duplicata encontrada
+      }
+    }
+    neuroSeen.push(key);
+    return true;
+  });
+  
   // Deduplicar outras seções
-  const sections = ['neurologico', 'cardiovascular', 'respiratorio', 'renal', 'gastrointestinal', 'extremidades', 'dispositivos'] as const;
+  const sections = ['cardiovascular', 'respiratorio', 'renal', 'gastrointestinal', 'extremidades', 'dispositivos'] as const;
   for (const section of sections) {
     const seen = new Set<string>();
     newData.objetivo[section] = data.objetivo[section].filter((d: DataPoint) => {

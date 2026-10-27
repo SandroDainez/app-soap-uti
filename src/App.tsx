@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { processEvolution, formatSoapFinal, formatSoapSimple, type ProcessedEvolution, type ClinicalData, type Alerta, type Diagnostico } from './utils/soap-engine';
 import AuditTest from './AuditTest';
 import AuditCompleta from './AuditCompleta';
+import TestDiagnosticos from './TestDiagnosticos';
 
 // ====== TOAST ======
 interface ToastMessage { id: number; text: string; type: 'success' | 'error' | 'info'; }
@@ -74,7 +75,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 // ====== MAIN APP ======
-type AppStep = 'input' | 'review' | 'final' | 'audit' | 'audit-completa';
+type AppStep = 'input' | 'review' | 'final' | 'audit' | 'audit-completa' | 'test-diagnosticos';
 
 function App() {
   const [step, setStep] = useState<AppStep>('input');
@@ -304,6 +305,7 @@ function App() {
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button onClick={() => setStep('audit')} style={{ padding: '8px 12px', fontSize: '13px', background: '#7c3aed', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>🔍 Auditoria</button>
             <button onClick={() => setStep('audit-completa')} style={{ padding: '8px 12px', fontSize: '13px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>🔬 Auditoria Completa</button>
+            <button onClick={() => setStep('test-diagnosticos')} style={{ padding: '8px 12px', fontSize: '13px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>🧪 Teste Diagnósticos</button>
             {step !== 'input' && (
               <button onClick={handleBackToInput} style={{ padding: '8px 12px', fontSize: '13px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>← Voltar</button>
             )}
@@ -321,6 +323,9 @@ function App() {
 
         {/* AUDIT COMPLETA */}
         {step === 'audit-completa' && <AuditCompleta />}
+
+        {/* TEST DIAGNOSTICOS */}
+        {step === 'test-diagnosticos' && <TestDiagnosticos />}
 
         {/* STEP 1: INPUT */}
         {step === 'input' && (
