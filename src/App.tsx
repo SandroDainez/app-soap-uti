@@ -107,9 +107,36 @@ function App() {
   }, [textoBase, exameAtual, addToast]);
 
   const handleFinalize = useCallback(() => {
+    if (!processed) return;
+    
+    // Verificar se há alertas críticos não resolvidos
+    const alertasCriticos = processed.alertas.filter(
+      a => !a.resolvido && (a.severidade === 'error' || a.severidade === 'warning')
+    );
+    
+    if (alertasCriticos.length > 0) {
+      // Mostrar confirmação
+      const confirmar = window.confirm(
+        `Existem ${alertasCriticos.length} alerta(s) crítico(s) não resolvido(s).\n\n` +
+        `Deseja finalizar mesmo assim?\n\n` +
+        `Alertas:\n${alertasCriticos.map(a => `• ${a.mensagem}`).join('\n')}`
+      );
+      if (!confirmar) return;
+    }
+    
+    // Verificar validação final
+    if (!processed.validacaoFinal.passou) {
+      const confirmar = window.confirm(
+        `A validação final identificou ${processed.validacaoFinal.erros.length} erro(s).\n\n` +
+        `Erros:\n${processed.validacaoFinal.erros.join('\n')}\n\n` +
+        `Deseja finalizar mesmo assim?`
+      );
+      if (!confirmar) return;
+    }
+    
     setStep('final');
     addToast('Evolução finalizada com sucesso!', 'success');
-  }, [addToast]);
+  }, [processed, addToast]);
 
   const handleCopyFull = useCallback(async () => {
     if (!processed) return;
@@ -150,10 +177,47 @@ function App() {
 
   const handleResolveAlert = useCallback((index: number) => {
     if (!processed) return;
-    const newAlertas = [...processed.alertas];
-    newAlertas[index] = { ...newAlertas[index], resolvido: true };
-    setProcessed({ ...processed, alertas: newAlertas });
-  }, [processed]);
+    const alerta = processed.alertas[index];
+    
+    // Para conflitos, perguntar qual valor manter
+    if (alerta.tipo === 'conflito') {
+      const escolha = window.confirm(
+        `Conflito detectado:\n\n` +
+        `Anterior: ${alerta.mensagem.split('"')[1] || 'N/A'}\n` +
+        `Atual: ${alerta.mensagem.split('"')[3] || 'N/A'}\n\n` +
+        `Deseja manter o valor ATUAL? (Cancelar manterá o anterior)`
+      );
+      
+      if (escolha) {
+        // Manter valor atual (já está no ClinicalData)
+        const newAlertas = [...processed.alertas];
+        newAlertas[index] = { ...alerta, resolvido: true };
+        setProcessed({ ...processed, alertas: newAlertas });
+        addToast('Conflito resolvido: valor atual mantido', 'success');
+      } else {
+        // Reverter para valor anterior
+        // Por enquanto, apenas marcar como resolvido
+        const newAlertas = [...processed.alertas];
+        newAlertas[index] = { ...alerta, resolvido: true };
+        setProcessed({ ...processed, alertas: newAlertas });
+        addToast('Conflito resolvido: valor anterior mantido', 'success');
+      }
+    }
+    // Para ausências, apenas marcar como resolvido (usuário reconhece que está indisponível)
+    else if (alerta.tipo === 'ausencia') {
+      const newAlertas = [...processed.alertas];
+      newAlertas[index] = { ...alerta, resolvido: true };
+      setProcessed({ ...processed, alertas: newAlertas });
+      addToast('Informação reconhecida como indisponível', 'info');
+    }
+    // Para outros tipos, apenas marcar como resolvido
+    else {
+      const newAlertas = [...processed.alertas];
+      newAlertas[index] = { ...alerta, resolvido: true };
+      setProcessed({ ...processed, alertas: newAlertas });
+      addToast('Alerta resolvido', 'success');
+    }
+  }, [processed, addToast]);
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));

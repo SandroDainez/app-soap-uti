@@ -15,7 +15,7 @@
 
 export interface DataPoint {
   value: string;
-  source: 'texto-base' | 'exame-atual';
+  source: 'texto-base' | 'exame-atual' | 'sistema';
   timestamp?: string; // data/hora extraída do texto
   isCurrent?: boolean; // se é informação atual
 }
@@ -290,11 +290,22 @@ function extractFromText(text: string, source: 'texto-base' | 'exame-atual'): Ex
 
     switch (cls) {
       case 'identificacao':
-        if (/nome|paciente/i.test(line)) result.identificacao.nome = line.replace(/^(nome|paciente)\s*[:\-]?\s*/i, '');
-        else if (/leito/i.test(line)) result.identificacao.leito = line.replace(/^leito\s*[:\-]?\s*/i, '');
-        else if (/conv[eê]nio/i.test(line)) result.identificacao.convenio = line.replace(/^conv[eê]nio\s*[:\-]?\s*/i, '');
-        else if (/dia de uti|d[úu]t[íi]/i.test(line)) result.identificacao.diaUTI = line.replace(/^(dia de uti|d[úu]t[íi])\s*[:\-]?\s*/i, '');
-        else if (/data|hora/i.test(line)) result.identificacao.dataHora = line.replace(/^(data|hora)\s*[:\-]?\s*/i, '');
+        // Aceitar variações comuns de identificação
+        if (/^(nome|paciente|nome do paciente|nome completo)/i.test(line)) {
+          result.identificacao.nome = line.replace(/^(nome|paciente|nome do paciente|nome completo)\s*[:\-]?\s*/i, '');
+        }
+        else if (/^(leito|quarto|aposento)/i.test(line)) {
+          result.identificacao.leito = line.replace(/^(leito|quarto|aposento)\s*[:\-]?\s*/i, '');
+        }
+        else if (/^(conv[eê]nio|plano de sa[úu]de|operadora)/i.test(line)) {
+          result.identificacao.convenio = line.replace(/^(conv[eê]nio|plano de sa[úu]de|operadora)\s*[:\-]?\s*/i, '');
+        }
+        else if (/^(dia de uti|d[úu]t[íi]|dia UTI)/i.test(line)) {
+          result.identificacao.diaUTI = line.replace(/^(dia de uti|d[úu]t[íi]|dia UTI)\s*[:\-]?\s*/i, '');
+        }
+        else if (/^(data|hora|data e hora|data\/hora)/i.test(line)) {
+          result.identificacao.dataHora = line.replace(/^(data|hora|data e hora|data\/hora)\s*[:\-]?\s*/i, '');
+        }
         break;
       case 'subjetivo':
         if (/hda|hist[óo]ria da doen[çc]a/i.test(line)) result.subjetivo.hda.push(line);
@@ -642,6 +653,46 @@ function buildClinicalData(base: ExtractionResult, atual: ExtractionResult): { d
     pendencias: [] as DataPoint[],
   };
 
+  // Geração automática de síntese se não houver avaliação explícita
+  if (avaliacao.sintese.length === 0) {
+    const problemas: string[] = [];
+    
+    // Listar diagnósticos
+    if (avaliacao.diagnosticos.length > 0) {
+      const dxList = avaliacao.diagnosticos.map(dx => dx.texto).join(', ');
+      problemas.push(`Paciente com ${avaliacao.diagnosticos.length} diagnóstico(s) ativo(s): ${dxList}`);
+    }
+    
+    // Listar suporte ventilatório
+    if (objetivo.ventilacao && objetivo.ventilacao.tipo !== 'nenhum') {
+      problemas.push(`Em suporte ventilatório: ${formatVentilationType(objetivo.ventilacao.tipo)}`);
+    }
+    
+    // Listar anomalias laboratoriais
+    const anemia = objetivo.examesLaboratoriais.find(e => /hemoglobina/i.test(e.nome) && parseFloat(e.valor) < 10);
+    if (anemia) {
+      problemas.push(`Anemia documentada (Hb ${anemia.valor})`);
+    }
+    
+    const ira = objetivo.examesLaboratoriais.find(e => /creatinina/i.test(e.nome) && parseFloat(e.valor) > 1.5);
+    if (ira) {
+      problemas.push(`Disfunção renal documentada (Cr ${ira.valor})`);
+    }
+    
+    // Listar infecções
+    const culturaPositiva = objetivo.microbiologia.find(c => c.situacao === 'positiva');
+    if (culturaPositiva) {
+      problemas.push(`Infecção documentada: ${culturaPositiva.material}`);
+    }
+    
+    if (problemas.length > 0) {
+      avaliacao.sintese.push({
+        value: problemas.join('. ') + '.',
+        source: 'sistema' as const,
+      });
+    }
+  }
+
   // Plano - merge por categoria
   const plano = {
     condutasPorProblema: mergeDataPoints(
@@ -788,6 +839,78 @@ function validateFinal(data: ClinicalData): { passou: boolean; erros: string[]; 
 
 // ======================== ETAPA 7: GERAÇÃO DO SOAP FINAL ========================
 
+// Função para deduplicar dados antes da geração final
+function deduplicateFinalData(data: ClinicalData): ClinicalData {
+  const newData = JSON.parse(JSON.stringify(data)) as ClinicalData;
+  
+  // Deduplicar sinais vitais
+  const svSeen = new Set<string>();
+  newData.objetivo.sinaisVitais = data.objetivo.sinaisVitais.filter((d: DataPoint) => {
+    const key = d.value.toLowerCase().trim();
+    if (svSeen.has(key)) return false;
+    svSeen.add(key);
+    return true;
+  });
+  
+  // Deduplicar microbiologia (precauções)
+  const microSeen = new Set<string>();
+  newData.objetivo.microbiologia = data.objetivo.microbiologia.filter((c: Cultura) => {
+    const key = c.material.toLowerCase().trim();
+    if (microSeen.has(key)) return false;
+    microSeen.add(key);
+    return true;
+  });
+  
+  // Deduplicar medicamentos
+  const medSeen = new Set<string>();
+  newData.objetivo.tratamentos = data.objetivo.tratamentos.filter((m: Medicamento) => {
+    const key = m.nome.toLowerCase().trim();
+    if (medSeen.has(key)) return false;
+    medSeen.add(key);
+    return true;
+  });
+  
+  // Deduplicar outras seções
+  const sections = ['neurologico', 'cardiovascular', 'respiratorio', 'renal', 'gastrointestinal', 'extremidades', 'dispositivos'] as const;
+  for (const section of sections) {
+    const seen = new Set<string>();
+    newData.objetivo[section] = data.objetivo[section].filter((d: DataPoint) => {
+      const key = d.value.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  
+  return newData;
+}
+
+// Função para filtrar fragmentos de formulário
+function filterFormFragments(data: ClinicalData): ClinicalData {
+  const newData = JSON.parse(JSON.stringify(data)) as ClinicalData;
+  
+  const filterFragment = (value: string): boolean => {
+    // Remover checkboxes não preenchidos (todos com espaço)
+    if (/\([ ]\)/.test(value) && !/\(X\)/i.test(value)) return false;
+    
+    // Remover campos vazios de formulário (apenas label sem valor)
+    if (/^[\w\s]+:\s*$/.test(value)) return false;
+    
+    // Remover linhas muito curtas sem significado clínico
+    if (value.trim().length < 3) return false;
+    
+    return true;
+  };
+  
+  // Aplicar filtro a todas as seções do objetivo
+  const sections = ['sinaisVitais', 'neurologico', 'cardiovascular', 'respiratorio', 'renal', 'gastrointestinal', 'extremidades', 'dispositivos'] as const;
+  for (const section of sections) {
+    newData.objetivo[section] = data.objetivo[section].filter((d: DataPoint) => filterFragment(d.value));
+  }
+  
+  return newData;
+}
+
 export function formatDiagnostico(dx: Diagnostico): string {
   let s = dx.texto;
   if (dx.cid) s += ` (${dx.cid})`;
@@ -796,6 +919,10 @@ export function formatDiagnostico(dx: Diagnostico): string {
 }
 
 export function formatSoapFinal(data: ClinicalData): string {
+  // Aplicar filtragem e deduplicação antes de gerar o texto
+  const filteredData = filterFormFragments(data);
+  const finalData = deduplicateFinalData(filteredData);
+  
   let o = '';
   o += '══════════════════════════════════════════════════\n';
   o += '            EVOLUÇÃO MÉDICA - UTI\n';
@@ -803,38 +930,38 @@ export function formatSoapFinal(data: ClinicalData): string {
 
   // IDENTIFICAÇÃO
   o += '▸ IDENTIFICAÇÃO\n';
-  if (data.identificacao.nome) o += `  • Nome: ${data.identificacao.nome.value}\n`;
-  if (data.identificacao.leito) o += `  • Leito: ${data.identificacao.leito.value}\n`;
-  if (data.identificacao.convenio) o += `  • Convênio: ${data.identificacao.convenio.value}\n`;
-  if (data.identificacao.diaUTI) o += `  • Dia de UTI: ${data.identificacao.diaUTI.value}\n`;
-  if (data.identificacao.dataHora) o += `  • Data/Hora: ${data.identificacao.dataHora.value}\n`;
+  if (finalData.identificacao.nome) o += `  • Nome: ${finalData.identificacao.nome.value}\n`;
+  if (finalData.identificacao.leito) o += `  • Leito: ${finalData.identificacao.leito.value}\n`;
+  if (finalData.identificacao.convenio) o += `  • Convênio: ${finalData.identificacao.convenio.value}\n`;
+  if (finalData.identificacao.diaUTI) o += `  • Dia de UTI: ${finalData.identificacao.diaUTI.value}\n`;
+  if (finalData.identificacao.dataHora) o += `  • Data/Hora: ${finalData.identificacao.dataHora.value}\n`;
   o += '\n';
 
   // S - SUBJETIVO
   o += '───────────────────────────────────────────────\n';
   o += 'S — SUBJETIVO / CONTEXTO\n';
   o += '───────────────────────────────────────────────\n';
-  if (data.subjetivo.hda.length > 0) {
+  if (finalData.subjetivo.hda.length > 0) {
     o += '  • História da Doença Atual:\n';
-    data.subjetivo.hda.forEach(d => o += `    ${d.value}\n`);
+    finalData.subjetivo.hda.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.subjetivo.motivoInternacao.length > 0) {
+  if (finalData.subjetivo.motivoInternacao.length > 0) {
     o += '  • Motivo da Internação:\n';
-    data.subjetivo.motivoInternacao.forEach(d => o += `    ${d.value}\n`);
+    finalData.subjetivo.motivoInternacao.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.subjetivo.antecedentes.length > 0) {
+  if (finalData.subjetivo.antecedentes.length > 0) {
     o += '  • Antecedentes Relevantes:\n';
-    data.subjetivo.antecedentes.forEach(d => o += `    ${d.value}\n`);
+    finalData.subjetivo.antecedentes.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.subjetivo.eventosInternacao.length > 0) {
+  if (finalData.subjetivo.eventosInternacao.length > 0) {
     o += '  • Eventos da Internação:\n';
-    data.subjetivo.eventosInternacao.forEach(d => o += `    ${d.value}\n`);
+    finalData.subjetivo.eventosInternacao.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.subjetivo.infoSubjetivaAtual.length > 0) {
+  if (finalData.subjetivo.infoSubjetivaAtual.length > 0) {
     o += '  • Informações Subjetivas Atuais:\n';
-    data.subjetivo.infoSubjetivaAtual.forEach(d => o += `    ${d.value}\n`);
+    finalData.subjetivo.infoSubjetivaAtual.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.subjetivo.hda.length === 0 && data.subjetivo.motivoInternacao.length === 0 && data.subjetivo.antecedentes.length === 0 && data.subjetivo.eventosInternacao.length === 0 && data.subjetivo.infoSubjetivaAtual.length === 0) {
+  if (finalData.subjetivo.hda.length === 0 && finalData.subjetivo.motivoInternacao.length === 0 && finalData.subjetivo.antecedentes.length === 0 && finalData.subjetivo.eventosInternacao.length === 0 && finalData.subjetivo.infoSubjetivaAtual.length === 0) {
     o += '  Paciente internado em UTI, sem informações subjetivas disponíveis no momento.\n';
   }
   o += '\n';
@@ -845,75 +972,75 @@ export function formatSoapFinal(data: ClinicalData): string {
   o += '───────────────────────────────────────────────\n\n';
 
   // 1. Sinais vitais
-  if (data.objetivo.sinaisVitais.length > 0) {
+  if (finalData.objetivo.sinaisVitais.length > 0) {
     o += '  1. Sinais Vitais:\n';
-    data.objetivo.sinaisVitais.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.sinaisVitais.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 2. Neurológico
-  if (data.objetivo.neurologico.length > 0) {
+  if (finalData.objetivo.neurologico.length > 0) {
     o += '  2. Avaliação Neurológica:\n';
-    data.objetivo.neurologico.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.neurologico.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 3. Cardiovascular
-  if (data.objetivo.cardiovascular.length > 0) {
+  if (finalData.objetivo.cardiovascular.length > 0) {
     o += '  3. Avaliação Cardiovascular:\n';
-    data.objetivo.cardiovascular.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.cardiovascular.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 4. Respiratório
-  if (data.objetivo.respiratorio.length > 0 || data.objetivo.ventilacao) {
+  if (finalData.objetivo.respiratorio.length > 0 || finalData.objetivo.ventilacao) {
     o += '  4. Avaliação Respiratória e Ventilatória:\n';
-    if (data.objetivo.ventilacao) {
-      o += `     • Tipo: ${formatVentilationType(data.objetivo.ventilacao.tipo)}\n`;
-      if (data.objetivo.ventilacao.modalidade) o += `     • ${data.objetivo.ventilacao.modalidade}\n`;
-      if (data.objetivo.ventilacao.fio2) o += `     • ${data.objetivo.ventilacao.fio2}\n`;
-      if (data.objetivo.ventilacao.peep) o += `     • ${data.objetivo.ventilacao.peep}\n`;
-      if (data.objetivo.ventilacao.spo2) o += `     • ${data.objetivo.ventilacao.spo2}\n`;
-      if (data.objetivo.ventilacao.gasometria) o += `     • ${data.objetivo.ventilacao.gasometria}\n`;
+    if (finalData.objetivo.ventilacao) {
+      o += `     • Tipo: ${formatVentilationType(finalData.objetivo.ventilacao.tipo)}\n`;
+      if (finalData.objetivo.ventilacao.modalidade) o += `     • ${finalData.objetivo.ventilacao.modalidade}\n`;
+      if (finalData.objetivo.ventilacao.fio2) o += `     • ${finalData.objetivo.ventilacao.fio2}\n`;
+      if (finalData.objetivo.ventilacao.peep) o += `     • ${finalData.objetivo.ventilacao.peep}\n`;
+      if (finalData.objetivo.ventilacao.spo2) o += `     • ${finalData.objetivo.ventilacao.spo2}\n`;
+      if (finalData.objetivo.ventilacao.gasometria) o += `     • ${finalData.objetivo.ventilacao.gasometria}\n`;
     }
-    data.objetivo.respiratorio.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.respiratorio.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 5. Renal
-  if (data.objetivo.renal.length > 0) {
+  if (finalData.objetivo.renal.length > 0) {
     o += '  5. Avaliação Renal e Balanço Hídrico:\n';
-    data.objetivo.renal.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.renal.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 6. Gastrointestinal
-  if (data.objetivo.gastrointestinal.length > 0) {
+  if (finalData.objetivo.gastrointestinal.length > 0) {
     o += '  6. Avaliação Gastrointestinal e Nutricional:\n';
-    data.objetivo.gastrointestinal.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.gastrointestinal.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 7. Extremidades
-  if (data.objetivo.extremidades.length > 0) {
+  if (finalData.objetivo.extremidades.length > 0) {
     o += '  7. Extremidades, Perfusão e Pele:\n';
-    data.objetivo.extremidades.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.extremidades.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 8. Dispositivos
-  if (data.objetivo.dispositivos.length > 0) {
+  if (finalData.objetivo.dispositivos.length > 0) {
     o += '  8. Dispositivos Invasivos:\n';
-    data.objetivo.dispositivos.forEach(d => o += `     ${d.value}\n`);
+    finalData.objetivo.dispositivos.forEach(d => o += `     ${d.value}\n`);
     o += '\n';
   }
 
   // 9. Exames laboratoriais
-  if (data.objetivo.examesLaboratoriais.length > 0) {
+  if (finalData.objetivo.examesLaboratoriais.length > 0) {
     o += '  9. Exames Laboratoriais:\n';
     // Agrupa por data se disponível
     const byDate = new Map<string, ExameLaboratorial[]>();
-    for (const ex of data.objetivo.examesLaboratoriais) {
+    for (const ex of finalData.objetivo.examesLaboratoriais) {
       const key = ex.data || 'sem-data';
       if (!byDate.has(key)) byDate.set(key, []);
       byDate.get(key)!.push(ex);
@@ -926,9 +1053,9 @@ export function formatSoapFinal(data: ClinicalData): string {
   }
 
   // 10. Microbiologia
-  if (data.objetivo.microbiologia.length > 0) {
+  if (finalData.objetivo.microbiologia.length > 0) {
     o += '  10. Microbiologia e Culturas:\n';
-    data.objetivo.microbiologia.forEach(c => {
+    finalData.objetivo.microbiologia.forEach(c => {
       o += `     • Material: ${c.material}\n`;
       if (c.dataColeta) o += `       Data da coleta: ${c.dataColeta}\n`;
       if (c.microrganismo) o += `       Microrganismo: ${c.microrganismo}\n`;
@@ -940,11 +1067,11 @@ export function formatSoapFinal(data: ClinicalData): string {
   }
 
   // 11. Tratamentos
-  if (data.objetivo.tratamentos.length > 0) {
+  if (finalData.objetivo.tratamentos.length > 0) {
     o += '  11. Tratamentos Relevantes em Andamento:\n';
     // Agrupa por categoria
     const byCategory = new Map<string, Medicamento[]>();
-    for (const med of data.objetivo.tratamentos) {
+    for (const med of finalData.objetivo.tratamentos) {
       if (!byCategory.has(med.categoria)) byCategory.set(med.categoria, []);
       byCategory.get(med.categoria)!.push(med);
     }
@@ -968,27 +1095,27 @@ export function formatSoapFinal(data: ClinicalData): string {
   o += '───────────────────────────────────────────────\n';
   o += 'A — AVALIAÇÃO\n';
   o += '───────────────────────────────────────────────\n';
-  if (data.avaliacao.sintese.length > 0) {
+  if (finalData.avaliacao.sintese.length > 0) {
     o += '  • Síntese Clínica:\n';
-    data.avaliacao.sintese.forEach(d => o += `    ${d.value}\n`);
+    finalData.avaliacao.sintese.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.avaliacao.diagnosticos.length > 0) {
+  if (finalData.avaliacao.diagnosticos.length > 0) {
     o += '  • Diagnósticos e Problemas Ativos:\n';
-    data.avaliacao.diagnosticos.forEach((dx, i) => o += `    ${i + 1}. ${formatDiagnostico(dx)}\n`);
+    finalData.avaliacao.diagnosticos.forEach((dx, i) => o += `    ${i + 1}. ${formatDiagnostico(dx)}\n`);
   }
-  if (data.avaliacao.hipoteses.length > 0) {
+  if (finalData.avaliacao.hipoteses.length > 0) {
     o += '  • Hipóteses Diagnósticas:\n';
-    data.avaliacao.hipoteses.forEach((dx, i) => o += `    ${i + 1}. ${formatDiagnostico(dx)}\n`);
+    finalData.avaliacao.hipoteses.forEach((dx, i) => o += `    ${i + 1}. ${formatDiagnostico(dx)}\n`);
   }
-  if (data.avaliacao.evolucaoProblemas.length > 0) {
+  if (finalData.avaliacao.evolucaoProblemas.length > 0) {
     o += '  • Evolução dos Principais Problemas:\n';
-    data.avaliacao.evolucaoProblemas.forEach(d => o += `    ${d.value}\n`);
+    finalData.avaliacao.evolucaoProblemas.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.avaliacao.pendencias.length > 0) {
+  if (finalData.avaliacao.pendencias.length > 0) {
     o += '  • Pendências:\n';
-    data.avaliacao.pendencias.forEach(d => o += `    ${d.value}\n`);
+    finalData.avaliacao.pendencias.forEach(d => o += `    ${d.value}\n`);
   }
-  if (data.avaliacao.sintese.length === 0 && data.avaliacao.diagnosticos.length === 0 && data.avaliacao.hipoteses.length === 0) {
+  if (finalData.avaliacao.sintese.length === 0 && finalData.avaliacao.diagnosticos.length === 0 && finalData.avaliacao.hipoteses.length === 0) {
     o += '  Avaliação clínica não documentada.\n';
   }
   o += '\n';
@@ -998,16 +1125,16 @@ export function formatSoapFinal(data: ClinicalData): string {
   o += 'P — PLANO\n';
   o += '───────────────────────────────────────────────\n';
   const planoSections = [
-    { label: 'Condutas por Problema', items: data.plano.condutasPorProblema },
-    { label: 'Antimicrobianos', items: data.plano.antimicrobianos },
-    { label: 'Suporte Ventilatório', items: data.plano.suporteVentilatorio },
-    { label: 'Medidas Hemodinâmicas', items: data.plano.medidasHemodinamicas },
-    { label: 'Controle Renal e Metabólico', items: data.plano.controleRenal },
-    { label: 'Nutrição', items: data.plano.nutricao },
-    { label: 'Profilaxias', items: data.plano.profilaxias },
-    { label: 'Exames e Interconsultas', items: data.plano.examesInterconsultas },
-    { label: 'Metas Terapêuticas', items: data.plano.metasTerapeuticas },
-    { label: 'Reavaliações Programadas', items: data.plano.reavaliacoes },
+    { label: 'Condutas por Problema', items: finalData.plano.condutasPorProblema },
+    { label: 'Antimicrobianos', items: finalData.plano.antimicrobianos },
+    { label: 'Suporte Ventilatório', items: finalData.plano.suporteVentilatorio },
+    { label: 'Medidas Hemodinâmicas', items: finalData.plano.medidasHemodinamicas },
+    { label: 'Controle Renal e Metabólico', items: finalData.plano.controleRenal },
+    { label: 'Nutrição', items: finalData.plano.nutricao },
+    { label: 'Profilaxias', items: finalData.plano.profilaxias },
+    { label: 'Exames e Interconsultas', items: finalData.plano.examesInterconsultas },
+    { label: 'Metas Terapêuticas', items: finalData.plano.metasTerapeuticas },
+    { label: 'Reavaliações Programadas', items: finalData.plano.reavaliacoes },
   ];
   let hasPlano = false;
   for (const sec of planoSections) {
